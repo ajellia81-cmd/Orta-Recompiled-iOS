@@ -64,6 +64,7 @@ if [ -n "$CHECK" ]; then
     echo "[1/5] Compile check: no XBE, no lift"
 else
     [ -f "$XBE" ] || fail "default.xbe not found ($XBE): give its path as an argument or in ORTA_XBE"
+    XBE=$(cd "$(dirname "$XBE")" && pwd)/$(basename "$XBE")   # absolute: the lift runs inside the toolkit's folder
     sha=$(shasum "$XBE" | cut -d' ' -f1)
     [ "$sha" = "$XBE_SHA1" ] || fail "this default.xbe (SHA-1 $sha) is not the supported Europe (PAL) one ($XBE_SHA1)"
     echo "[1/5] Lifting default.xbe (PAL)"
