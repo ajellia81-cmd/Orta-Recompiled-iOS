@@ -4,6 +4,10 @@
 #include "vk_check.h"
 
 #include <SDL3/SDL.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#include <dlfcn.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,12 +62,23 @@ int orta_vk_check(char *found, size_t n)
     int ok = 0;
 
     found[0] = 0;
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    /* iOS: MoltenVK is linked into the app (no Vulkan loader, no library to open) */
+    (void)lib;
+    so = NULL;
+    get = (vkc_get_proc)dlsym(RTLD_DEFAULT, "vkGetInstanceProcAddr");
+    if (!get) {
+        snprintf(found, n, "no Vulkan driver found (MoltenVK missing in the app)");
+        return 0;
+    }
+#else
     so = SDL_LoadObject(lib);
     if (!so) {
         snprintf(found, n, "no Vulkan driver found");
         return 0;
     }
     get = (vkc_get_proc)SDL_LoadFunction(so, "vkGetInstanceProcAddr");
+#endif
     if (get) {
         vkc_enum_version ev = (vkc_enum_version)get(NULL, "vkEnumerateInstanceVersion");
         vkc_create create = (vkc_create)get(NULL, "vkCreateInstance");
@@ -145,7 +160,8 @@ int orta_vk_check(char *found, size_t n)
                 VKC_MINOR(loader), 0);
         }
     }
-    SDL_UnloadObject(so);
+    if (so)
+        SDL_UnloadObject(so);
     if (test && *test == '1')
         ok = 0;
     return ok;
@@ -153,6 +169,13 @@ int orta_vk_check(char *found, size_t n)
 
 void orta_vk_message(char *out, size_t n, const char *found)
 {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    snprintf(out, n,
+             "I am sorry - Panzer Dragoon Orta Recomp needs Vulkan 1.3 through MoltenVK, and this device's GPU does "
+             "not offer what it needs.\n\nFound: %s",
+             found && *found ? found : "nothing");
+    return;
+#endif
 #ifdef __ANDROID__
     snprintf(out, n,
              "I am sorry - Panzer Dragoon Orta Recomp unfortunately only supports devices whose graphics driver has "

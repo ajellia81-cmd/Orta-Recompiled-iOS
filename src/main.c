@@ -28,6 +28,14 @@
 #include "vk_check.h"
 #include <SDL3/SDL.h>
 #endif
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#define ORTA_IOS 1
+#include <SDL3/SDL_main.h>       /* iOS: SDL runs main() inside UIApplicationMain */
+#include "ios_app.h"             /* packaging/ios: SDL on the main thread, the touch controls, the game thread */
+#endif
+#endif
 #if defined(ORTA_INSTALLER)
 #include <string.h>
 #include "game_setup.h"
@@ -105,18 +113,23 @@ static X86Ctx s_main_ctx = X86CTX_INIT;
 #define main orta_game_main
 int orta_game_main(int argc, char **argv);
 #endif
+static int orta_run(void *opt_ptr);
+
 int main(int argc, char **argv)
 {
-    X86Ctx *ctx = &s_main_ctx;
     HostOptions opt;
-    char xbe_path[HOST_PATH_MAX];
-    void *xbe;
-    size_t xbe_size = 0;
 
     if (host_init(argc, argv, &opt) != 0)
         return 1;
     printf("=== Panzer Dragoon Orta - static recompilation ===\n");
     settings_init(opt.save_dir);                   /* saves\settings.ini: RECOMP OPTIONS values (settings.h) */
+#if defined(ORTA_IOS)
+    orta_ios_start();                              /* SDL video + pads on the main thread, the touch controls */
+    /* first start on a phone / tablet: 16:9 (the screen is wider still; the picture is pillarboxed and its side
+     * bands are wider than the camera cut-out's safe-area inset). RECOMP OPTIONS > ASPECT RATIO changes it. */
+    if (!settings_get("aspect_ratio", NULL))
+        settings_set("aspect_ratio", "16:9");
+#endif
     host_log_version_and_host(opt.game_dir);       /* "version: ..." / "host: ..." for bug reports */
     /* RECOMP OPTIONS > FRAME RATE > VSYNC (vsync=on|off): the toolkit reads RECOMP_VSYNC once at start, so the
      * saved value becomes its default here (an explicit RECOMP_VSYNC still wins); a change needs a restart. */
@@ -194,6 +207,24 @@ int main(int argc, char **argv)
     if (!orta_game_setup(opt.game_dir))
         return 1;
 #endif
+#if defined(ORTA_IOS)
+    /* iOS: from here on the title runs on a thread of its own (16 MB stack); the main thread stays in UIKit's run
+     * loop pumping SDL's events, which the NV2A thread's window needs (toolkit nv2a_vk.c, XR_VK_IOS) */
+    return orta_ios_run_game(orta_run, &opt);
+#else
+    return orta_run(&opt);
+#endif
+}
+
+/* The title: memory layout, kernel, devices, then the XBE's entry point (on its own thread on iOS). */
+static int orta_run(void *opt_ptr)
+{
+    HostOptions opt = *(HostOptions *)opt_ptr;
+    X86Ctx *ctx = &s_main_ctx;
+    char xbe_path[HOST_PATH_MAX];
+    void *xbe;
+    size_t xbe_size = 0;
+
     snprintf(xbe_path, sizeof(xbe_path), "%s/default.xbe", opt.game_dir);
     xbe = host_read_file(xbe_path, &xbe_size);
     if (!xbe) {

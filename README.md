@@ -103,6 +103,12 @@ OPTIONS > RECOMP OPTIONS > BOOT ANIMATION. **BACK > Boot animation > None** remo
   - **Boot animation** - none, or import your boot.mpg
   - **About and licences**
 
+## iOS (experimental)
+
+An iPhone / iPad build for **LiveContainer**: the game's code is lifted from your own `default.xbe` on the build
+machine (or GitHub's macOS runners) and compiled into the app; the disc image goes to the phone. See
+[docs/IOS.md](docs/IOS.md) (Korean).
+
 ## Building
 
 The APK is built on Linux with `tools/build_android.sh` (Android SDK 36, NDK r30, JDK 21, Gradle 9.9.1; the script

@@ -6,6 +6,10 @@
  * same repeat collapsing, the time limit, restart with the start environment, atomic writes, dialogs.
  * Android (maintainer 2026-11-11: NOT portable): game/ saves/ data/ live in the app's internal storage; the log is
  * mirrored to logcat (tag ORTA); RESTART NOW asks the activity to relaunch the app (an app cannot exec itself).
+ * iOS / iPadOS (2026-11-18, the ORTA_IOS branches): game/ saves/ data/ media/ live in the app's Documents folder,
+ * which the Files app and Finder show (UIFileSharingEnabled), so the player drops the disc image into game/ and
+ * reaches saves and the log there; the log is mirrored to the unified log (Xcode console, Console.app); an app
+ * cannot start itself again, so RESTART NOW tells the player to reopen it.
  *
  * Crash reports and device traps: one vectored exception handler on the toolkit's signal-backed list
  * (win32_compat AddVectoredExceptionHandler; arm64 since option-c e8cb152), the same routing as host_win32.c (APU,
@@ -28,13 +32,23 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
-#include <ucontext.h>
+#if !defined(__APPLE__)
+#include <ucontext.h>               /* Darwin's needs _XOPEN_SOURCE and nothing here uses it */
+#endif
 #include <unistd.h>
 
 #include <SDL3/SDL.h>
 #ifdef __ANDROID__
 #include <android/log.h>
 #include <jni.h>
+#endif
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#include <os/log.h>
+#if TARGET_OS_IPHONE
+#define ORTA_IOS 1
+#endif
+extern char **environ;              /* Darwin's unistd.h does not declare it */
 #endif
 
 #include "kernel.h"
@@ -215,6 +229,15 @@ static void root_dir(char *out)
 #ifdef __ANDROID__
     /* Android: the app's internal storage (not portable, maintainer 2026-11-11; kept on update, gone on uninstall) */
     const char *r = SDL_GetAndroidInternalStoragePath();
+#elif defined(ORTA_IOS)
+    /* iOS: the app's Documents folder (the Files app shows it as "Orta"; kept on update, gone on uninstall) */
+    char docs[HOST_PATH_MAX];
+    const char *r = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+    if (!r || !*r) {
+        const char *home = getenv("HOME");     /* the app's container */
+        snprintf(docs, sizeof docs, "%s/Documents", home ? home : ".");
+        r = docs;
+    }
 #else
     const char *r = xbox_host_root();
 #endif
@@ -273,6 +296,8 @@ static void log_line(const char *line)
     static int raw = -1;
 #ifdef __ANDROID__
     __android_log_write(ANDROID_LOG_INFO, "ORTA", line);   /* every line, uncollapsed: adb logcat -s ORTA */
+#elif defined(ORTA_IOS)
+    os_log(OS_LOG_DEFAULT, "%{public}s", line);           /* every line, uncollapsed: Xcode console / Console.app */
 #endif
     if (!strncmp(line, "[CRASH]", 7) || !strncmp(line, "[WATCHDOG]", 10)) {
         log_flush_run();
@@ -353,8 +378,8 @@ static void host_log_drain(void)
     close(s_log_pipe_w);
     s_log_pipe_w = -1;
     if (s_log_thread_on) {
-        /* bounded wait: 5 s, as on Windows (bionic has no pthread_timedjoin_np: poll the thread's done flag) */
-#ifdef __ANDROID__
+        /* bounded wait: 5 s, as on Windows (bionic and Darwin have no pthread_timedjoin_np: poll the done flag) */
+#if defined(__ANDROID__) || defined(__APPLE__)
         int t;
         for (t = 0; t < 500 && !s_log_thread_done; t++)
             usleep(10000);
@@ -447,6 +472,15 @@ void host_restart(void)
     (*env)->DeleteLocalRef(env, act);
     _exit(0);
 }
+#elif defined(ORTA_IOS)
+/* iOS: an app cannot start itself (no exec, no relaunch API). The settings are saved already; the player closes the
+ * app (app switcher) and opens it again. Ending the process here would look like a crash, so the game goes on. */
+void host_restart(void)
+{
+    fprintf(stderr, "[HOST] restart: not possible on iOS -- the settings apply at the next start\n");
+    host_notice("The new settings apply the next time the game starts.\n\n"
+                "Close Panzer Dragoon Orta Recomp in the app switcher and open it again.");
+}
 #else
 void host_restart(void)
 {
@@ -535,6 +569,15 @@ int host_init(int argc, char **argv, HostOptions *opt)
 
     mkdir_p(opt->save_dir);
     mkdir_p(opt->data_dir);
+#ifdef ORTA_IOS
+    /* the folders the player fills through the Files app: they must be there to be seen */
+    mkdir_p(opt->game_dir);
+    {
+        char media[HOST_PATH_MAX];
+        join(media, opt->exe_dir, "media");
+        mkdir_p(media);
+    }
+#endif
     if (!console) open_log(opt->data_dir);
     else { setvbuf(stdout, NULL, _IONBF, 0); setvbuf(stderr, NULL, _IONBF, 0); }
     /* Nothing outside the folder (CLAUDE.md, portable layout): the GPU drivers' shader caches go into data/

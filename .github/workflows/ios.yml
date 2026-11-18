@@ -1,0 +1,82 @@
+# Builds OrtaRecomp.ipa on a GitHub macOS runner (tools/build_ios.sh), for LiveContainer. Run it from the Actions
+# tab (Run workflow). Same shape as the Lost World iOS port's workflow.
+#
+# This repository holds only source code and may be public. default.xbe and the built app stay in a PRIVATE
+# repository (PRIVATE_REPO below): default.xbe in its release tagged "xbe", each new OrtaRecomp.ipa in its release
+# tagged "latest". The secret PRIVATE_REPO_TOKEN is a fine-grained token with Contents: read and write on that
+# repository only. Nothing built is uploaded here: a public repository's artifacts can be downloaded by anyone, and
+# the app holds code made from the disc.
+#
+# "check" builds without default.xbe: the toolkit runtime and the port's sources compiled for iOS, nothing linked.
+name: iOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "ipa: the game (needs default.xbe in the private release 'xbe') / check: compile check without it"
+        type: choice
+        options: [ipa, check]
+        default: ipa
+
+permissions:
+  contents: read
+
+env:
+  PRIVATE_REPO: ${{ github.repository }}-private
+
+concurrency:
+  group: ios-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          command -v ninja >/dev/null || brew install ninja
+          cmake --version | head -1
+          xcodebuild -version
+          python3 --version
+
+      - name: default.xbe (private repository, release "xbe")
+        if: inputs.mode == 'ipa'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::error::The secret PRIVATE_REPO_TOKEN is missing."; exit 1; fi
+          if ! gh release download xbe -R "$PRIVATE_REPO" --pattern default.xbe --dir . ; then
+            echo "::error::No default.xbe in the release tagged 'xbe' of $PRIVATE_REPO (or the token cannot read it)."
+            exit 1
+          fi
+          ls -l default.xbe
+
+      - name: Dependencies (cache)
+        uses: actions/cache@v4
+        with:
+          path: build/ios/deps
+          key: ios-deps-${{ runner.os }}-${{ hashFiles('tools/build_ios.sh') }}
+
+      - name: Build
+        env:
+          ORTA_IOS_CHECK: ${{ inputs.mode == 'check' && '1' || '' }}
+        run: bash tools/build_ios.sh default.xbe
+
+      - name: OrtaRecomp.ipa (private repository, release "latest")
+        if: inputs.mode == 'ipa'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          gh release view latest -R "$PRIVATE_REPO" >/dev/null 2>&1 ||
+            gh release create latest -R "$PRIVATE_REPO" --title "OrtaRecomp.ipa" --notes "The latest build (replaced by each run)."
+          gh release upload latest out/ios/OrtaRecomp.ipa -R "$PRIVATE_REPO" --clobber
+          gh release edit latest -R "$PRIVATE_REPO" --notes "Built from ${GITHUB_SHA::7} (run ${GITHUB_RUN_NUMBER})."
+          echo "::notice::OrtaRecomp.ipa uploaded to the private repository's release 'latest'"
+        # never published here
+      - name: Clean up
+        if: always()
+        run: rm -rf default.xbe out/ios build/ios/gen build/ios/pipe

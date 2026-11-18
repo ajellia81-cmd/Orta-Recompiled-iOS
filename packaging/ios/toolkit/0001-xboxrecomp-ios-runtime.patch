@@ -1,0 +1,435 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 465a4c9..db8ed6c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -97,7 +97,8 @@ endif()
+ # The port installer (game_setup.h); its SDL3 window (xbox_install_ui) when SDL3 is there (the Vulkan build).
+ add_subdirectory(src/install)
+ # The player's one exe (release; launcher.h): needs the installer window and the zip reader (Vulkan build).
+-if(XBOXRECOMP_VULKAN AND TARGET xbox_install_ui)
++# Not on iOS: an app there cannot start processes (fork / exec), and the game is built on a Mac, not by a launcher.
++if(XBOXRECOMP_VULKAN AND TARGET xbox_install_ui AND NOT IOS)
+     add_subdirectory(src/launcher)
+ endif()
+ 
+diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
+index 4c19c68..179eb31 100644
+--- a/src/apu/apu_xaudio2.c
++++ b/src/apu/apu_xaudio2.c
+@@ -276,6 +276,27 @@ static SDL_AudioStream *g_sdl_stream;
+ static int              g_sdl_channels = 2;
+ static int              g_sdl_frames_written;
+ 
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++/* iOS (2026-11-18, after the Lost World iOS port's findings): no sound while the app is away - under LiveContainer
++ * the process may go on running in the background and the device would keep playing. Back in front, the stream is
++ * opened anew by the submitting thread: iOS sometimes hands the old one back silent (its audio session not active
++ * again yet) until another round trip. */
++#define XA2_IOS 1
++static SDL_AtomicInt s_xa2_reopen;
++static bool SDLCALL xa2_app_watch(void *u, SDL_Event *e)
++{
++    (void)u;
++    if ((e->type == SDL_EVENT_WILL_ENTER_BACKGROUND || e->type == SDL_EVENT_DID_ENTER_BACKGROUND) && g_sdl_stream)
++        SDL_PauseAudioStreamDevice(g_sdl_stream);
++    else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND)
++        SDL_SetAtomicInt(&s_xa2_reopen, 1);
++    return true;
++}
++#endif
++#endif
++
+ int xa2_surround(void) { return g_sdl_channels == 6; }
+ int xa2_channels(void) { return g_sdl_channels; }
+ 
+@@ -309,6 +330,15 @@ int xa2_init(void)
+         return 0;
+     }
+     SDL_ResumeAudioStreamDevice(g_sdl_stream);
++#if defined(XA2_IOS)
++    {
++        static int watching;
++        if (!watching) {
++            watching = 1;
++            SDL_AddEventWatch(xa2_app_watch, NULL);
++        }
++    }
++#endif
+     g_xbox_audio_surround = g_sdl_channels == 6;
+     g_sdl_frames_written = 0;
+     fprintf(stderr, "[AUDIO] SDL3 audio stream on '%s' (%d Hz %s 16-bit, up to %d x %d frames queued)\n",
+@@ -337,6 +367,20 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
+     int bytes_per_frame = g_sdl_channels * (int)sizeof(int16_t);
+     int n = num_samples > XA2_BUF_SAMPLES ? XA2_BUF_SAMPLES : num_samples;
+ 
++#if defined(XA2_IOS)
++    if (g_sdl_stream && SDL_GetAtomicInt(&s_xa2_reopen)) {
++        SDL_AudioSpec spec;
++        SDL_SetAtomicInt(&s_xa2_reopen, 0);
++        spec.format = SDL_AUDIO_S16;
++        spec.channels = g_sdl_channels;
++        spec.freq = XA2_SAMPLE_RATE;
++        SDL_DestroyAudioStream(g_sdl_stream);
++        g_sdl_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
++        if (g_sdl_stream)
++            SDL_ResumeAudioStreamDevice(g_sdl_stream);
++        fprintf(stderr, "[AUDIO] back in front: stream opened again%s\n", g_sdl_stream ? "" : " - FAILED, no sound");
++    }
++#endif
+     if (!g_sdl_stream || n <= 0)
+         return 0;
+     if (SDL_GetAudioStreamQueued(g_sdl_stream) >= XA2_NUM_BUFS * XA2_BUF_SAMPLES * bytes_per_frame)
+diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
+index ec863b3..372e97a 100644
+--- a/src/nv2a_vk/nv2a_vk.c
++++ b/src/nv2a_vk/nv2a_vk.c
+@@ -74,6 +74,14 @@
+ #define VK_USE_PLATFORM_VI_NN 1
+ #endif
+ #include <vulkan/vulkan.h>
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++/* iOS / iPadOS through MoltenVK (2026-11-18): the CAMetalLayer outlives the background, but no GPU work may be
++ * submitted while the app is there (Metal aborts such command buffers) - the flip waits instead (sc_ready). */
++#define XR_VK_IOS 1
++#endif
++#endif
+ #if !defined(__SWITCH__)
+ #include <SDL3/SDL.h>
+ #include <SDL3/SDL_vulkan.h>
+@@ -82,6 +90,93 @@
+ #include <glslang/Include/glslang_c_interface.h>
+ #include <glslang/Public/resource_limits_c.h>
+ 
++#if defined(XR_VK_IOS)
++/* iOS: UIKit objects belong to the main thread, and SDL pumps events only there. The NV2A thread makes and drives the
++ * window here, so on iOS the port runs the title on a thread of its own and keeps the main thread in a loop of
++ * SDL_PumpEvents (packaging/ios). The window calls below go to that thread (SDL_RunOnMainThread, waiting), and the
++ * flip reads the queue the main thread fills (SDL_PeepEvents: SDL_PollEvent would pump from this thread). */
++typedef struct {
++    int op;
++    const char *title;
++    int a, b;
++    int *pa, *pb;
++    SDL_WindowFlags flags;
++    bool on, ok;
++    const SDL_DisplayMode *mode;
++    SDL_Window *win;
++    VkInstance inst;
++    VkSurfaceKHR surf, *psurf;
++    const VkAllocationCallbacks *alloc;
++} xr_ios_call;
++enum { XR_IOS_CREATE, XR_IOS_DESTROY, XR_IOS_FULLSCREEN, XR_IOS_FSMODE, XR_IOS_SIZE, XR_IOS_POS, XR_IOS_PIXELS,
++       XR_IOS_SURFACE, XR_IOS_DESTROY_SURFACE };
++
++static void SDLCALL xr_ios_main(void *u)
++{
++    xr_ios_call *c = (xr_ios_call *)u;
++    switch (c->op) {
++    case XR_IOS_CREATE:          c->win = SDL_CreateWindow(c->title, c->a, c->b, c->flags); break;
++    case XR_IOS_DESTROY:         SDL_DestroyWindow(c->win); break;
++    case XR_IOS_FULLSCREEN:      c->ok = SDL_SetWindowFullscreen(c->win, c->on); break;
++    case XR_IOS_FSMODE:          c->ok = SDL_SetWindowFullscreenMode(c->win, c->mode); break;
++    case XR_IOS_SIZE:            c->ok = SDL_SetWindowSize(c->win, c->a, c->b); break;
++    case XR_IOS_POS:             c->ok = SDL_SetWindowPosition(c->win, c->a, c->b); break;
++    case XR_IOS_PIXELS:          c->ok = SDL_GetWindowSizeInPixels(c->win, c->pa, c->pb); break;
++    case XR_IOS_SURFACE:         c->ok = SDL_Vulkan_CreateSurface(c->win, c->inst, c->alloc, c->psurf); break;
++    case XR_IOS_DESTROY_SURFACE: SDL_Vulkan_DestroySurface(c->inst, c->surf, c->alloc); break;
++    }
++}
++
++static void xr_ios_run(xr_ios_call *c)
++{
++    if (SDL_IsMainThread() || !SDL_RunOnMainThread(xr_ios_main, c, true))
++        xr_ios_main(c);
++}
++
++static SDL_Window *xr_ios_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags)
++{
++    /* the whole screen at its native pixels (without HIGH_PIXEL_DENSITY the Metal layer is in points: a third of
++     * the resolution on a 3x phone), no status bar over the game */
++    xr_ios_call c = { XR_IOS_CREATE };
++    c.title = title; c.a = w; c.b = h;
++    c.flags = flags | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIGH_PIXEL_DENSITY;
++    xr_ios_run(&c);
++    return c.win;
++}
++static void xr_ios_DestroyWindow(SDL_Window *w)
++{ xr_ios_call c = { XR_IOS_DESTROY }; c.win = w; xr_ios_run(&c); }
++static bool xr_ios_SetWindowFullscreen(SDL_Window *w, bool on)
++{ xr_ios_call c = { XR_IOS_FULLSCREEN }; c.win = w; c.on = on; xr_ios_run(&c); return c.ok; }
++static bool xr_ios_SetWindowFullscreenMode(SDL_Window *w, const SDL_DisplayMode *m)
++{ xr_ios_call c = { XR_IOS_FSMODE }; c.win = w; c.mode = m; xr_ios_run(&c); return c.ok; }
++static bool xr_ios_SetWindowSize(SDL_Window *w, int a, int b)
++{ xr_ios_call c = { XR_IOS_SIZE }; c.win = w; c.a = a; c.b = b; xr_ios_run(&c); return c.ok; }
++static bool xr_ios_SetWindowPosition(SDL_Window *w, int a, int b)
++{ xr_ios_call c = { XR_IOS_POS }; c.win = w; c.a = a; c.b = b; xr_ios_run(&c); return c.ok; }
++static bool xr_ios_GetWindowSizeInPixels(SDL_Window *w, int *pa, int *pb)
++{ xr_ios_call c = { XR_IOS_PIXELS }; c.win = w; c.pa = pa; c.pb = pb; xr_ios_run(&c); return c.ok; }
++static bool xr_ios_Vulkan_CreateSurface(SDL_Window *w, VkInstance inst, const VkAllocationCallbacks *a, VkSurfaceKHR *s)
++{ xr_ios_call c = { XR_IOS_SURFACE }; c.win = w; c.inst = inst; c.alloc = a; c.psurf = s; xr_ios_run(&c); return c.ok; }
++static void xr_ios_Vulkan_DestroySurface(VkInstance inst, VkSurfaceKHR s, const VkAllocationCallbacks *a)
++{ xr_ios_call c = { XR_IOS_DESTROY_SURFACE }; c.inst = inst; c.surf = s; c.alloc = a; xr_ios_run(&c); }
++static bool xr_ios_PollEvent(SDL_Event *e)
++{
++    if (SDL_IsMainThread())
++        SDL_PumpEvents();
++    return SDL_PeepEvents(e, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0;
++}
++#define SDL_CreateWindow              xr_ios_CreateWindow
++#define SDL_DestroyWindow             xr_ios_DestroyWindow
++#define SDL_SetWindowFullscreen       xr_ios_SetWindowFullscreen
++#define SDL_SetWindowFullscreenMode   xr_ios_SetWindowFullscreenMode
++#define SDL_SetWindowSize             xr_ios_SetWindowSize
++#define SDL_SetWindowPosition         xr_ios_SetWindowPosition
++#define SDL_GetWindowSizeInPixels     xr_ios_GetWindowSizeInPixels
++#define SDL_Vulkan_CreateSurface      xr_ios_Vulkan_CreateSurface
++#define SDL_Vulkan_DestroySurface     xr_ios_Vulkan_DestroySurface
++#define SDL_PollEvent                 xr_ios_PollEvent
++#endif
++
+ #if defined(__SWITCH__)
+ #include <pthread.h>
+ #endif
+@@ -3756,15 +3851,19 @@ static int sc_extent_changed(void)
+     sc_choose(&caps, &e, &pre);
+     return e.width != 0xFFFFFFFFu && (e.width != s_sc_extent.width || e.height != s_sc_extent.height);
+ }
++#endif
+ 
++#if defined(__ANDROID__) || defined(XR_VK_IOS)
+ static bool SDLCALL sc_event_watch(void *u, SDL_Event *e)
+ {
+     (void)u;
+     if (e->type == SDL_EVENT_DID_ENTER_BACKGROUND || e->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+         SDL_SetAtomicInt(&s_sc_background, 1);
+     } else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
++#if !defined(XR_VK_IOS)
+         SDL_SetAtomicInt(&s_sc_lost, 1);        /* a new window surface behind the same SDL window */
+-        SDL_SetAtomicInt(&s_sc_background, 0);
++#endif
++        SDL_SetAtomicInt(&s_sc_background, 0);  /* iOS: the same CAMetalLayer, the swapchain stays */
+     }
+     return true;
+ }
+@@ -3814,6 +3913,19 @@ static int surface_recreate(void)
+ static int sc_ready(void)
+ {
+     static unsigned retry;
++#if defined(XR_VK_IOS)
++    /* iOS: the whole renderer holds still in the background (a command buffer submitted there is aborted and the
++     * device lost). The flip's thread waits here; when that is the main thread it keeps the run loop going, or the
++     * foreground event that ends the wait would never come. */
++    if (SDL_GetAtomicInt(&s_sc_background)) {
++        vkDeviceWaitIdle(s_dev);
++        while (SDL_GetAtomicInt(&s_sc_background)) {
++            if (SDL_IsMainThread())
++                SDL_PumpEvents();
++            SDL_Delay(50);
++        }
++    }
++#endif
+     if (SDL_GetAtomicInt(&s_sc_background))
+         return 0;
+     if (!SDL_GetAtomicInt(&s_sc_lost) && s_swapchain)
+@@ -4184,7 +4296,7 @@ static int ready(void)
+     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT feds =
+         { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT };
+     VkPhysicalDeviceFeatures have;
+-    const char *dext[5];
++    const char *dext[8];
+     uint32_t ndext = 0;
+     const char *layers[1];
+     uint32_t nlayers = 0;
+@@ -4444,7 +4556,7 @@ static int ready(void)
+         snprintf(w, sizeof w, "The window's Vulkan surface could not be created (SDL: %s).", SDL_GetError());
+         vk_fatal(w);
+     }
+-#if defined(__ANDROID__)
++#if defined(__ANDROID__) || defined(XR_VK_IOS)
+     if (!s_headless)
+         SDL_AddEventWatch(sc_event_watch, NULL);    /* background / foreground: the surface's life */
+ #endif
+@@ -4480,6 +4592,13 @@ static int ready(void)
+                     s_have_budget = 1;
+                     break;
+                 }
++        /* A portability implementation (MoltenVK on macOS / iOS) lists VK_KHR_portability_subset, and the spec
++         * then requires it to be enabled. */
++        for (i = 0; i < ne; i++)
++            if (!strcmp(ep[i].extensionName, "VK_KHR_portability_subset")) {
++                dext[ndext++] = "VK_KHR_portability_subset";
++                break;
++            }
+     }
+     dci.pNext = &f2;
+     dci.queueCreateInfoCount = 1;
+diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
+index b203c49..a39d906 100644
+--- a/src/platform/win32_compat.c
++++ b/src/platform/win32_compat.c
+@@ -33,7 +33,15 @@
+ #include <sys/sysctl.h>
+ #include <sys/stat.h>
+ #include <mach/mach.h>
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++/* iOS / iPadOS: the SDK's mach_vm.h is "#error unsupported"; vm_map (mach/vm_map.h, from mach.h) is the same call
++ * with 64-bit vm_address_t on arm64. No PROT_EXEC for data either: an app without the JIT entitlement cannot map
++ * executable memory, and the guest's code never runs from guest memory here (static recompilation). */
++#define XR_COMPAT_IOS 1
++#else
+ #include <mach/mach_vm.h>
++#endif
+ #else
+ #include <sys/sysinfo.h>
+ #endif
+@@ -1145,9 +1153,16 @@ static int prot_from_page(DWORD protect)
+     case PAGE_NOACCESS:          return PROT_NONE;
+     case PAGE_READONLY:          return PROT_READ;
+     case PAGE_READWRITE:         return PROT_READ | PROT_WRITE;
++#if defined(XR_COMPAT_IOS)
++    /* iOS: executable data mappings are refused (no JIT entitlement); the guest only ever reads its code pages */
++    case PAGE_EXECUTE:           return PROT_READ;
++    case PAGE_EXECUTE_READ:      return PROT_READ;
++    case PAGE_EXECUTE_READWRITE: return PROT_READ | PROT_WRITE;
++#else
+     case PAGE_EXECUTE:           return PROT_EXEC;
+     case PAGE_EXECUTE_READ:      return PROT_READ | PROT_EXEC;
+     case PAGE_EXECUTE_READWRITE: return PROT_READ | PROT_WRITE | PROT_EXEC;
++#endif
+     default:                     return PROT_READ | PROT_WRITE;
+     }
+ }
+@@ -1168,6 +1183,22 @@ static int prot_from_page(DWORD protect)
+  * Memory from mach_vm_map is released by munmap like any other, because the
+  * BSD and Mach halves of Darwin share one VM map, so VirtualFree is unchanged.
+  */
++#if defined(XR_COMPAT_IOS)
++static void *mach_map_fixed(void *address, size_t size, int prot)
++{
++    vm_address_t addr = (vm_address_t)(uintptr_t)address;
++    vm_size_t len = (size + vm_page_size - 1) & ~((vm_size_t)vm_page_size - 1);
++    vm_prot_t vmprot = VM_PROT_NONE;
++
++    if (prot & PROT_READ)  vmprot |= VM_PROT_READ;
++    if (prot & PROT_WRITE) vmprot |= VM_PROT_WRITE;
++    /* the maximum protection without EXECUTE: iOS refuses executable anonymous memory to an app */
++    if (vm_map(mach_task_self(), &addr, len, 0, VM_FLAGS_FIXED, MEMORY_OBJECT_NULL, 0, FALSE, vmprot,
++               VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_DEFAULT) != KERN_SUCCESS)
++        return MAP_FAILED;
++    return (void *)(uintptr_t)addr;
++}
++#else
+ static void *mach_map_fixed(void *address, size_t size, int prot)
+ {
+     mach_vm_address_t addr = (mach_vm_address_t)(uintptr_t)address;
+@@ -1196,6 +1227,7 @@ static void *mach_map_fixed(void *address, size_t size, int prot)
+     }
+     return (void *)(uintptr_t)addr;
+ }
++#endif /* XR_COMPAT_IOS */
+ #endif
+ 
+ /* Length registry, defined with the view helpers below. Win32 frees by address
+@@ -1789,6 +1821,17 @@ static int anon_map_fd(const char *name)
+     snprintf(shm_name, sizeof(shm_name), "/%s_%ld", base, seq);
+     int fd = shm_open(shm_name, O_CREAT | O_RDWR | O_EXCL, 0600);
+     if (fd >= 0) shm_unlink(shm_name);
++#if defined(XR_COMPAT_IOS)
++    /* iOS: the app sandbox refuses POSIX shared memory (EPERM). An unlinked file in the app's own tmp folder
++     * ($TMPDIR, set by the system for every app) gives the same thing: ftruncate + MAP_SHARED views of one object. */
++    if (fd < 0) {
++        const char *td = getenv("TMPDIR");
++        char path[1024];
++        snprintf(path, sizeof path, "%s/%s_%ld_XXXXXX", (td && *td) ? td : "/tmp", base, seq);
++        fd = mkstemp(path);
++        if (fd >= 0) unlink(path);
++    }
++#endif
+     return fd;
+ #elif defined(XR_COMPAT_MEMFD_SYSCALL)
+     return (int)syscall(__NR_memfd_create, name ? name : "xbox_map", 0);
+@@ -2163,8 +2206,23 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
+  * address; an access violation's write flag comes from the ESR record in the signal frame (WnR bit; no record ->
+  * read). The MMIO handlers decode the faulting load/store with mmio_decode_a64.h through mmio_decode.h.
+  */
+-#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
++/* Darwin arm64 (iOS / Apple silicon macOS, 2026-11-18): the same handler. The signal frame's mcontext is a pointer
++ * to struct __darwin_mcontext64 - __ss holds x0-x28, fp, lr, sp, pc, cpsr; __es holds the fault address and the ESR
++ * of the data abort, so the write flag comes straight from ESR.WnR. Protection faults arrive as SIGBUS there, also
++ * in the list. Not with pointer authentication (arm64e): a resumed pc would have to be re-signed; an iOS app builds
++ * as plain arm64, so that case keeps the no-trap stubs below. lldb / Xcode stop on every trapped access unless told
++ * "process handle SIGSEGV SIGBUS -n false -p true -s false". */
++#if defined(__APPLE__) && defined(__aarch64__)
++#if !__has_feature(ptrauth_calls)
++#define XR_VEH_DARWIN_A64 1
++#endif
++#endif
++#if (defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))) || defined(XR_VEH_DARWIN_A64)
++#if defined(XR_VEH_DARWIN_A64)
++#include <sys/ucontext.h>
++#else
+ #include <ucontext.h>
++#endif
+ #if defined(__aarch64__)
+ #include "mmio_decode_a64.h"   /* mmio_a64_find_esr / mmio_a64_syndrome */
+ #endif
+@@ -2178,7 +2236,53 @@ static const int s_veh_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
+ static struct sigaction s_veh_old[VEH_NSIGS];
+ static int s_veh_installed;
+ 
+-#if defined(__aarch64__)
++#if defined(XR_VEH_DARWIN_A64)
++/* CONTEXT <-> the Darwin arm64 signal frame (uc_mcontext -> struct __darwin_mcontext64). */
++static void veh_ctx_from(CONTEXT *c, const ucontext_t *uc, const siginfo_t *si, DWORD code)
++{
++    const struct __darwin_arm_thread_state64 *ss = &uc->uc_mcontext->__ss;
++    int i;
++    for (i = 0; i < 29; i++)
++        c->X[i] = (uint64_t)ss->__x[i];
++    c->X[29] = (uint64_t)ss->__fp;
++    c->X[30] = (uint64_t)ss->__lr;
++    c->Sp = (uint64_t)ss->__sp;
++    c->Pc = (uint64_t)ss->__pc;
++    c->Cpsr = (uint32_t)ss->__cpsr;
++    c->ContextFlags = 0;
++    c->XrFaultAddress = code == EXCEPTION_ACCESS_VIOLATION
++                        ? (uint64_t)(si->si_addr ? (uintptr_t)si->si_addr : (uintptr_t)uc->uc_mcontext->__es.__far)
++                        : 0;
++}
++
++static void veh_ctx_to(ucontext_t *uc, const CONTEXT *c)
++{
++    struct __darwin_arm_thread_state64 *ss = &uc->uc_mcontext->__ss;
++    int i;
++    for (i = 0; i < 29; i++)
++        ss->__x[i] = c->X[i];
++    ss->__fp = c->X[29];
++    ss->__lr = c->X[30];
++    ss->__sp = c->Sp;
++    ss->__pc = c->Pc;
++    ss->__cpsr = c->Cpsr;
++}
++
++static uint64_t veh_pc(const ucontext_t *uc) { return (uint64_t)uc->uc_mcontext->__ss.__pc; }
++
++/* ESR.WnR of the data abort, from the exception state the kernel saved; an ESR that is not a data abort (should not
++ * happen for SIGSEGV / SIGBUS) falls back to the faulting instruction. */
++static int veh_is_write(const ucontext_t *uc)
++{
++    uint64_t esr = (uint64_t)uc->uc_mcontext->__es.__esr;
++    uint32_t insn;
++    MmioA64Syndrome sy = mmio_a64_syndrome(esr);
++    if (sy.data_abort)
++        return sy.write;
++    memcpy(&insn, (const void *)(uintptr_t)uc->uc_mcontext->__ss.__pc, 4);
++    return mmio_a64_insn_writes(insn);
++}
++#elif defined(__aarch64__)
+ /* CONTEXT <-> the arm64 signal frame (mcontext = the kernel's struct sigcontext on glibc and bionic). */
+ static void veh_ctx_from(CONTEXT *c, const ucontext_t *uc, const siginfo_t *si, DWORD code)
+ {
