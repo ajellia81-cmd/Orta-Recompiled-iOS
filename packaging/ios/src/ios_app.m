@@ -62,6 +62,13 @@ int orta_ios_run_game(int (*fn)(void *), void *arg)
 
 /* The touch controls over the game's window: SDL makes that window later, on the NV2A thread's request (toolkit
  * nv2a_vk.c), so a main-thread timer looks for it and attaches the overlay once (overlay_ios.m keeps it on top). */
+static int s_native_lines;            /* the screen's short side in pixels (1320 on an iPhone 18 Pro Max) */
+
+int orta_ios_native_lines(void)
+{
+    return s_native_lines;
+}
+
 static volatile float s_safe_x;      /* the wider side's safe-area inset, as a fraction of the screen's width */
 
 float orta_ios_safe_x(void)
@@ -130,6 +137,17 @@ void orta_ios_start(void)
         }];
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO))
         fprintf(stderr, "[IOS] SDL_InitSubSystem failed: %s\n", SDL_GetError());
+    {
+        /* SDL3's display mode is in points with its pixel density: the pixels are the two multiplied */
+        const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+        if (dm && dm->w > 0 && dm->h > 0) {
+            float d = dm->pixel_density > 0.0f ? dm->pixel_density : 1.0f;
+            int pw = (int)(dm->w * d + 0.5f), ph = (int)(dm->h * d + 0.5f);
+            s_native_lines = pw < ph ? pw : ph;
+            fprintf(stderr, "[IOS] screen %dx%d pixels (%dx%d points x %.2f)\n", pw > ph ? pw : ph,
+                    s_native_lines, dm->w > dm->h ? dm->w : dm->h, dm->w > dm->h ? dm->h : dm->w, d);
+        }
+    }
     touchpad_init();
     xbox_InputSetPadPriority(touchpad_pad_priority);   /* a real pad stays player 1's first choice */
     overlay_when_window();

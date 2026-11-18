@@ -136,6 +136,14 @@ int main(int argc, char **argv)
         settings_set("aspect_ratio", r >= 1.70 ? "21:9" : r >= 1.55 ? "16:10" : "4:3");
         printf("[IOS] display ratio %.3f: first-start aspect %s\n", r, settings_get("aspect_ratio", "?"));
     }
+    /* and the 3D at the screen's own resolution, 1:1 to its pixels (RENDER RESOLUTION lists the screen's height in
+     * place of the nearest step, recomp_manual.c) */
+    if (!settings_get("render_scale_wide", NULL) && orta_ios_native_lines() > 480) {
+        char v[32];
+        snprintf(v, sizeof v, "%.4f", orta_ios_native_lines() / 480.0);
+        settings_set("render_scale_wide", v);
+        printf("[IOS] first-start render resolution: %d lines\n", orta_ios_native_lines());
+    }
 #endif
     host_log_version_and_host(opt.game_dir);       /* "version: ..." / "host: ..." for bug reports */
     /* RECOMP OPTIONS > FRAME RATE > VSYNC (vsync=on|off): the toolkit reads RECOMP_VSYNC once at start, so the

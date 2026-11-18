@@ -1096,6 +1096,7 @@ static void opt_node_stock(uint32_t node, uint32_t *count, uint32_t *glyphs)
  * shown as SCREEN; the HUD moved to the edges keeps out of the safe area (packaging/ios ios_app.m) */
 #define ORTA_IOS_SCREEN 1
 extern float orta_ios_safe_x(void);
+extern int orta_ios_native_lines(void);
 #endif
 #endif
 #if defined(ORTA_IOS_SCREEN)
@@ -1325,7 +1326,28 @@ static int rv_index(int id)
 
 /* RENDER RESOLUTION: 4:3 = 1.00X..5.00X in 0.25 steps; 16:9 = the standard sizes (CLAUDE.md). The aspect is the one
  * running (read at start), each keeps its own key. */
+#if defined(ORTA_IOS_SCREEN)
+/* iOS: the screen's own height in pixels takes the place of the nearest step (1320 on an iPhone 18 Pro Max, for
+ * 1440) - with SCREEN the 3D is then drawn 1:1 to the screen's pixels: lines x the display's ratio = its width */
+static int k_wide_lines[] = { 480, 720, 900, 1080, 1440, 1800, 2160, 2400 };
+static void orta_ios_native_step(void)
+{
+    static int done;
+    int n = orta_ios_native_lines(), i, best = 1;
+    if (done || n <= 480)
+        return;
+    done = 1;
+    for (i = 1; i < 8; i++)
+        if (abs(k_wide_lines[i] - n) < abs(k_wide_lines[best] - n))
+            best = i;
+    if (n > k_wide_lines[best - 1] && (best == 7 || n < k_wide_lines[best + 1])) {
+        fprintf(stderr, "[ORTA] render resolution: the screen's %d lines in place of %d\n", n, k_wide_lines[best]);
+        k_wide_lines[best] = n;
+    }
+}
+#else
 static const int k_wide_lines[] = { 480, 720, 900, 1080, 1440, 1800, 2160, 2400 };
+#endif
 static int s_ws_start = -1;
 static int rv_ws(void)
 {
@@ -1351,7 +1373,13 @@ static double rv_aspect_menu(void)
     return !strcmp(a, "16:10") ? 1.6 : !strcmp(a, "21:9") ? orta_aspect_21x9() : !strcmp(a, "16:9") ? 16.0 / 9.0 : 4.0 / 3.0;
 }
 static int rv_render_last(int ws) { return ws ? 7 : 16; }
-static double rv_render_factor(int s, int ws) { return ws ? k_wide_lines[s] / 480.0 : 1.0 + 0.25 * s; }
+static double rv_render_factor(int s, int ws)
+{
+#if defined(ORTA_IOS_SCREEN)
+    orta_ios_native_step();
+#endif
+    return ws ? k_wide_lines[s] / 480.0 : 1.0 + 0.25 * s;
+}
 static const char *rv_render_key(int ws) { return ws ? "render_scale_wide" : "render_scale"; }
 static int rv_render_step(int ws, int *saved)
 {
