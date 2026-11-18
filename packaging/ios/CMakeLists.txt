@@ -55,7 +55,7 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/port/port_icon.h
 
 set(ORTA_PORT_SRC ${REPO}/src/main.c ${REPO}/src/input.c ${REPO}/src/settings.c ${REPO}/src/vk_check.c
     ${REPO}/src/platform/host_linux.c)
-set(ORTA_IOS_SRC src/ios_app.m src/touchpad_ios.c src/overlay_ios.m)
+set(ORTA_IOS_SRC src/ios_app.m src/touchpad_ios.c src/touch_ios.m)
 set(ORTA_DEFS ORTA_VULKAN=1 ORTA_INSTALLER=1 ORTA_BOOTVIDEO=1 _GNU_SOURCE)
 
 function(orta_setup t)
@@ -82,7 +82,7 @@ orta_setup(OrtaRecomp ${RECOMP_GEN_DIR})
 target_link_libraries(OrtaRecomp PRIVATE ${ORTA_TK_LIBS} SDL3::SDL3 ${MOLTENVK_LIB}
     "-framework Metal" "-framework QuartzCore" "-framework IOSurface" "-framework UIKit" "-framework Foundation"
     "-framework CoreGraphics" "-framework GameController" "-framework CoreHaptics" "-framework AVFoundation"
-    "-framework CoreMotion" "-framework AudioToolbox" "-framework CoreAudio" c++)
+    "-framework CoreMotion" "-framework AudioToolbox" "-framework CoreAudio" "-framework UniformTypeIdentifiers" c++)
 # SDL looks vkGetInstanceProcAddr up with dlsym: keep it; crash reports name the generated function (dladdr)
 target_link_options(OrtaRecomp PRIVATE "-Wl,-u,_vkGetInstanceProcAddr" "-Wl,-export_dynamic")
 set_target_properties(OrtaRecomp PROPERTIES

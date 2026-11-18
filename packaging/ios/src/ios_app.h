@@ -8,18 +8,22 @@
 #ifndef ORTA_IOS_APP_H
 #define ORTA_IOS_APP_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* First thing in main() (main thread): SDL's video, pads and audio started here (SDL3 wants video on the main
- * thread), landscape only, the touch controls (a virtual gamepad, drawn over the game's window as soon as there is
- * one) and the pad ranking (real pads before the touch pad). */
+ * thread), landscape only, the screen kept on, the touch controls and the BACK menu (touch_ios.m, the Android
+ * port's; over the game's window as soon as there is one) and the pad ranking (real pads before the touch pad). */
 void orta_ios_start(void);
 
-/* The game window's safe-area inset on its wider side, as a fraction of the window's width (0 before the window):
- * the HUD at the screen's edges keeps out of it (recomp_manual.c). */
-float orta_ios_safe_x(void);
+/* First start, game/ empty (main.c): the system file picker for the disc image (the Android launcher's "choose the
+ * disc image"); its path into out, opened in place and kept accessible for the installer. 0: cancelled. */
+int orta_ios_pick_disc(char *out, size_t n);
+/* 1 when game/ holds a disc image (.iso / .xiso) the installer will take */
+int orta_ios_game_dir_has_image(const char *game_dir);
 
 /* The screen's short side in pixels (0 before orta_ios_start): the render resolution 1:1 to the screen
  * (recomp_manual.c, main.c). */

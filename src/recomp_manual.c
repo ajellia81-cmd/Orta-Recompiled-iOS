@@ -1093,9 +1093,8 @@ static void opt_node_stock(uint32_t node, uint32_t *count, uint32_t *glyphs)
 #include <TargetConditionals.h>
 #if TARGET_OS_IPHONE
 /* iOS (2026-11-18): "21:9" is the phone's whole screen (toolkit kernel_xbox.c: any ratio from 1.70 is the display's),
- * shown as SCREEN; the HUD moved to the edges keeps out of the safe area (packaging/ios ios_app.m) */
+ * shown as SCREEN; the HUD at the edges as on Android (drawn under the cut-out too, no inset) */
 #define ORTA_IOS_SCREEN 1
-extern float orta_ios_safe_x(void);
 extern int orta_ios_native_lines(void);
 #endif
 #endif
@@ -1859,11 +1858,6 @@ void sub_0006A520(RECOMP_PARAMS)
         static uint32_t bq[ORTA_HUD_MAXQ];
         float s16 = 0.75f * f;                       /* fb px -> 16:9 layout px (0.75 / q, q = 1 / f) */
         float k = 4.0f / (3.0f * f), dmove = 320.0f * (1.0f - k);
-#if defined(ORTA_IOS_SCREEN)
-        /* iOS: the edge groups stop at the safe area (the camera cut-out, the rounded corners) - the same distance
-         * to it as to the edge at 16:9 (the Lost World iOS port does the same with its side HUD) */
-        dmove -= 640.0f * orta_ios_safe_x();
-#endif
         int m = 0;
         for (i = 0; i < n; i++) {                    /* this batch's quads only, sorted by x0 (insertion) */
             uint32_t va = s_hud_q[i];

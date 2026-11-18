@@ -1,6 +1,7 @@
 /* ios_app.m - see ios_app.h. SPDX-License-Identifier: GPL-3.0-or-later */
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <SDL3/SDL.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -60,8 +61,6 @@ int orta_ios_run_game(int (*fn)(void *), void *arg)
     return g.rc;
 }
 
-/* The touch controls over the game's window: SDL makes that window later, on the NV2A thread's request (toolkit
- * nv2a_vk.c), so a main-thread timer looks for it and attaches the overlay once (overlay_ios.m keeps it on top). */
 static int s_native_lines;            /* the screen's short side in pixels (1320 on an iPhone 18 Pro Max) */
 
 int orta_ios_native_lines(void)
@@ -69,58 +68,93 @@ int orta_ios_native_lines(void)
     return s_native_lines;
 }
 
-static volatile float s_safe_x;      /* the wider side's safe-area inset, as a fraction of the screen's width */
-
-float orta_ios_safe_x(void)
-{
-    return s_safe_x;
-}
-
-/* The game's window (the NV2A thread's, made with SDL_WINDOW_VULKAN), or NULL; the caller SDL_free()s *list. */
-static SDL_Window *game_window(SDL_Window ***list)
-{
-    int n = 0, i;
-    SDL_Window **w = SDL_GetWindows(&n);
-    *list = w;
-    for (i = 0; w && i < n; i++)
-        if (SDL_GetWindowFlags(w[i]) & SDL_WINDOW_VULKAN)
-            return w[i];
-    return NULL;
-}
-
+/* The touch controls over the game's window: SDL makes that window later, on the NV2A thread's request (toolkit
+ * nv2a_vk.c), so a main-thread timer looks for it (made with SDL_WINDOW_VULKAN) and attaches the controls once -
+ * the Android port shows them from the game's start on, never over the installer (setGameRunning). */
 static void overlay_when_window(void)
 {
-    __block int attached = 0;
     [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) {
-        SDL_Window **list;
-        SDL_Window *w = game_window(&list);
-        (void)t;
-        if (w) {
-            SDL_Rect sa;
-            int ww = 0, wh = 0;
-            if (!attached) {
-                touchpad_overlay_attach(w);
-                attached = 1;
+        int n = 0, i;
+        SDL_Window **w = SDL_GetWindows(&n);
+        for (i = 0; w && i < n; i++)
+            if (SDL_GetWindowFlags(w[i]) & SDL_WINDOW_VULKAN) {
+                touchpad_overlay_attach(w[i]);
+                [t invalidate];
+                break;
             }
-            /* the safe area, for the HUD at the screen's edges (recomp_manual.c, aspect SCREEN); it changes when the
-             * phone is turned the other way round */
-            if (SDL_GetWindowSafeArea(w, &sa) && SDL_GetWindowSize(w, &ww, &wh) && ww > 0) {
-                int l = sa.x, r = ww - sa.x - sa.w;
-                float f = (float)(l > r ? l : r) / (float)ww;
-                if (f != s_safe_x) {
-                    s_safe_x = f;
-                    fprintf(stderr, "[IOS] window %dx%d points, safe-area inset %.1f%% of the width\n", ww, wh,
-                            100.0f * f);
-                }
-            }
-        }
-        SDL_free(list);
+        SDL_free(w);
     }];
+}
+
+/* ── the disc image at the first start (the Android launcher's "choose the disc image" in the system picker) ── */
+
+@interface OrtaDiscPicker : NSObject <UIDocumentPickerDelegate>
+@property (nonatomic) BOOL done;
+@property (nonatomic, strong) NSURL *url;
+@end
+@implementation OrtaDiscPicker
+- (void)documentPicker:(UIDocumentPickerViewController *)c didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+{
+    (void)c;
+    self.url = urls.firstObject;
+    self.done = YES;
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)c { (void)c; self.done = YES; }
+@end
+
+int orta_ios_game_dir_has_image(const char *game_dir)
+{
+    for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:@(game_dir) error:nil]) {
+        NSString *e = f.pathExtension.lowercaseString;
+        if ([e isEqualToString:@"iso"] || [e isEqualToString:@"xiso"])
+            return 1;
+    }
+    return 0;
+}
+
+int orta_ios_pick_disc(char *out, size_t n)
+{
+    OrtaDiscPicker *d = [OrtaDiscPicker new];
+    UIWindow *win = nil;
+    UIViewController *vc = [UIViewController new];
+    UIDocumentPickerViewController *p;
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes)
+        if ([sc isKindOfClass:UIWindowScene.class]) {
+            win = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)sc];
+            break;
+        }
+    if (!win)
+        win = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+    vc.view.backgroundColor = UIColor.blackColor;
+    win.rootViewController = vc;
+    win.windowLevel = UIWindowLevelAlert;
+    [win makeKeyAndVisible];
+    /* opened in place, not copied: an image is several GB; the installer reads it from there (xr_game_setup's
+     * image_path - never deleted, it is the player's file) */
+    p = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeDiskImage, UTTypeData ]
+                                                                    asCopy:NO];
+    p.delegate = d;
+    p.allowsMultipleSelection = NO;
+    [vc presentViewController:p animated:YES completion:nil];
+    while (!d.done) {
+        @autoreleasepool {
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+            SDL_PumpEvents();
+        }
+    }
+    win.hidden = YES;
+    out[0] = 0;
+    if (!d.url)
+        return 0;
+    if (![d.url startAccessingSecurityScopedResource])      /* kept open: the installer reads it next */
+        fprintf(stderr, "[IOS] the picked image is not security scoped (reading it may fail)\n");
+    snprintf(out, n, "%s", d.url.fileSystemRepresentation);
+    fprintf(stderr, "[IOS] disc image picked: %s\n", out);
+    return 1;
 }
 
 void orta_ios_start(void)
 {
-    /* (the hints and the thermal line follow the Lost World iOS port) */
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");        /* dimmed; a first swipe does not leave the game */
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");            /* touches stay touches (the overlay has them) */
@@ -148,6 +182,9 @@ void orta_ios_start(void)
                     s_native_lines, dm->w > dm->h ? dm->w : dm->h, dm->w > dm->h ? dm->h : dm->w, d);
         }
     }
+    /* the screen stays on (Android: FLAG_KEEP_SCREEN_ON - the first start's install takes minutes, and a game
+     * played with a pad touches nothing) */
+    UIApplication.sharedApplication.idleTimerDisabled = YES;
     touchpad_init();
     xbox_InputSetPadPriority(touchpad_pad_priority);   /* a real pad stays player 1's first choice */
     overlay_when_window();

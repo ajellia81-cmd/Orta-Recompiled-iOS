@@ -33,6 +33,7 @@
 #if TARGET_OS_IPHONE
 #define ORTA_IOS 1
 #include <SDL3/SDL_main.h>       /* iOS: SDL runs main() inside UIApplicationMain */
+#include <unistd.h>               /* access */
 #include "ios_app.h"             /* packaging/ios: SDL on the main thread, the touch controls, the game thread */
 #endif
 #endif
@@ -57,7 +58,7 @@ static void setup_log(void *ctx, const char *text)
     fflush(stdout);
 }
 
-static int orta_game_setup(const char *game_dir)
+static int orta_game_setup(const char *game_dir, const char *image_path)
 {
     /* The supported versions (CLAUDE.md title decisions, docs/xbe.md, README): name + default.xbe SHA-1. PAL only
      * (maintainer 2026-11-01; the US variant is on hold). */
@@ -75,6 +76,7 @@ static int orta_game_setup(const char *game_dir)
     if (fm && *fm)
         o.test_free_bytes = (uint64_t)strtoull(fm, NULL, 10) << 20;
     o.game_dir = game_dir;
+    o.image_path = image_path;          /* iOS: the image picked at the first start, read in place (never deleted) */
     o.game = "Panzer Dragoon Orta";
     o.title_id = 0x4947002Bu;
     o.versions = versions;
@@ -219,8 +221,25 @@ int main(int argc, char **argv)
 #endif
 
 #if defined(ORTA_INSTALLER)
-    if (!orta_game_setup(opt.game_dir))
-        return 1;
+    {
+        const char *image = NULL;
+#if defined(ORTA_IOS)
+        /* iOS, first start with nothing in game/: the system file picker for the disc image (the Android launcher's
+         * "choose the disc image"); dropping the image into game/ through the Files app still works too */
+        static char picked[1024];
+        char xbe_check[HOST_PATH_MAX + 16];
+        snprintf(xbe_check, sizeof xbe_check, "%s/default.xbe", opt.game_dir);
+        if (access(xbe_check, F_OK) != 0 && !orta_ios_game_dir_has_image(opt.game_dir)) {
+            if (orta_ios_pick_disc(picked, sizeof picked))
+                image = picked;
+            else
+                host_notice("No disc image chosen.\n\nChoose it the next time the game starts, or put the Panzer "
+                            "Dragoon Orta (Europe) disc image into the game folder (Files app).");
+        }
+#endif
+        if (!orta_game_setup(opt.game_dir, image))
+            return 1;
+    }
 #endif
 #if defined(ORTA_IOS)
     /* iOS: from here on the title runs on a thread of its own (16 MB stack); the main thread stays in UIKit's run

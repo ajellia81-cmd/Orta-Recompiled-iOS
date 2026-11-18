@@ -158,10 +158,25 @@ mkdir -p "$STAGE/OrtaRecomp.app/licenses"
 cp LICENSE "$STAGE/OrtaRecomp.app/licenses/Orta-Recompiled_GPL-3.0.txt"
 cp "$TK/LICENSE" "$STAGE/OrtaRecomp.app/licenses/xboxrecomp_MIT.txt"
 cp "$TK/NOTICE" "$STAGE/OrtaRecomp.app/licenses/xboxrecomp_NOTICE.txt"
+cp "$TK/LICENSES/LGPL-2.1.txt" "$STAGE/OrtaRecomp.app/licenses/xemu-parts_LGPL-2.1.txt"
 cp "$DEPS/src/SDL/LICENSE.txt" "$STAGE/OrtaRecomp.app/licenses/SDL3_zlib.txt"
 cp "$DEPS/src/glslang/LICENSE.txt" "$STAGE/OrtaRecomp.app/licenses/glslang.txt" 2>/dev/null || true
 mvk_lic=$(find "$MVK_DIR" -maxdepth 3 -name LICENSE | head -1 || true)
 [ -n "$mvk_lic" ] && cp "$mvk_lic" "$STAGE/OrtaRecomp.app/licenses/MoltenVK_Apache-2.0.txt"
+# the BACK menu's "About and licences" (touch_ios.m) reads this list, as the APK's assets/licenses/README.txt
+cat > "$STAGE/OrtaRecomp.app/licenses/README.txt" <<'LICEOF'
+Orta Recompiled - iOS: the licences of everything inside this app
+
+Orta Recompiled (this app's own code)   GPL-3.0-or-later   github.com/almost-drowned-rat/Orta-Recompiled-Android
+xboxrecomp toolkit (option-c)           MIT, parts from xemu under LGPL-2.1-or-later (NOTICE lists them)
+SDL3                                    zlib               github.com/libsdl-org/SDL
+glslang                                 BSD / MIT / Apache-2.0   github.com/KhronosGroup/glslang
+MoltenVK                                Apache-2.0         github.com/KhronosGroup/MoltenVK
+
+The game's code in this app was made from the player's own disc on the build machine: this app is for that
+player only and is never shared. Panzer Dragoon Orta is a trademark of SEGA; this project is not affiliated with
+SEGA, Microsoft or Apple.
+LICEOF
 # ad hoc signature (LiveContainer and the sideloading tools sign it again)
 codesign --force --sign - --timestamp=none "$STAGE/OrtaRecomp.app" >/dev/null 2>&1 || true
 (cd "$OUT" && zip -qry OrtaRecomp.ipa Payload)
