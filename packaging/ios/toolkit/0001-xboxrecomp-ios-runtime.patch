@@ -81,6 +81,38 @@ index 4c19c68..179eb31 100644
      if (!g_sdl_stream || n <= 0)
          return 0;
      if (SDL_GetAudioStreamQueued(g_sdl_stream) >= XA2_NUM_BUFS * XA2_BUF_SAMPLES * bytes_per_frame)
+diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
+index f2dabc9..751059c 100644
+--- a/src/kernel/kernel_xbox.c
++++ b/src/kernel/kernel_xbox.c
+@@ -221,7 +221,16 @@ void (*volatile g_xbox_nv2a_idle_hook)(void) = NULL;
+  * the display's ratio before its window opens (xbox_video_aspect_fit); a ratio
+  * in XBOX_ASPECT_21_MIN..MAX replaces 64:27, any other (a 16:9 desktop) keeps
+  * it. RECOMP_DISPLAY_RATIO=<w>x<h> or <ratio> stands in for the display (tests). */
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++/* iOS (2026-11-18): "21:9" is the phone's whole screen, whatever its ratio past 16:9 - an iPhone 18 Pro Max is
++ * 2868x1320 = 2.17, and 64:27 would letterbox it (the Lost World iOS port fills the screen the same way) */
++#define XBOX_ASPECT_21_MIN 1.70
++#else
+ #define XBOX_ASPECT_21_MIN 2.30
++#endif
+ #define XBOX_ASPECT_21_MAX 2.42
+ static double s_video_aspect = 0.0;
+ static int s_video_aspect_21;                     /* 21:9 chosen: the ratio may follow the display */
+@@ -261,6 +270,10 @@ void xbox_video_aspect_fit(double display_ratio)
+     if (!s_video_aspect_21 || fitted)
+         return;                                   /* the first call wins: RECOMP_DISPLAY_RATIO, then the display */
+     fitted = 1;
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++    if (display_ratio > 0.0 && display_ratio < 1.0)
++        display_ratio = 1.0 / display_ratio;      /* the display's mode may be reported in portrait */
++#endif
+     if (display_ratio >= XBOX_ASPECT_21_MIN && display_ratio <= XBOX_ASPECT_21_MAX) {
+         s_video_aspect = display_ratio;
+         fprintf(stderr, "  [video] 21:9 = the display's %.4f (64:27 = 2.3704)\n", display_ratio);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
 index ec863b3..372e97a 100644
 --- a/src/nv2a_vk/nv2a_vk.c

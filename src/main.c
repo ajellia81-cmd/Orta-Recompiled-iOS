@@ -125,10 +125,17 @@ int main(int argc, char **argv)
     settings_init(opt.save_dir);                   /* saves\settings.ini: RECOMP OPTIONS values (settings.h) */
 #if defined(ORTA_IOS)
     orta_ios_start();                              /* SDL video + pads on the main thread, the touch controls */
-    /* first start on a phone / tablet: 16:9 (the screen is wider still; the picture is pillarboxed and its side
-     * bands are wider than the camera cut-out's safe-area inset). RECOMP OPTIONS > ASPECT RATIO changes it. */
-    if (!settings_get("aspect_ratio", NULL))
-        settings_set("aspect_ratio", "16:9");
+    /* first start: the picture fills the screen (the Lost World iOS port's rule) - on a phone "21:9" (shown as
+     * SCREEN: the display's own ratio, 2.17 on an iPhone 18 Pro Max; toolkit kernel_xbox.c), the HUD at its edges
+     * kept out of the safe area; on an iPad (about 4:3) 4:3. RECOMP OPTIONS > ASPECT RATIO changes it. */
+    if (!settings_get("aspect_ratio", NULL)) {
+        const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+        double r = (dm && dm->w > 0 && dm->h > 0) ? (double)dm->w / (double)dm->h : 2.0;
+        if (r < 1.0)
+            r = 1.0 / r;
+        settings_set("aspect_ratio", r >= 1.70 ? "21:9" : r >= 1.55 ? "16:10" : "4:3");
+        printf("[IOS] display ratio %.3f: first-start aspect %s\n", r, settings_get("aspect_ratio", "?"));
+    }
 #endif
     host_log_version_and_host(opt.game_dir);       /* "version: ..." / "host: ..." for bug reports */
     /* RECOMP OPTIONS > FRAME RATE > VSYNC (vsync=on|off): the toolkit reads RECOMP_VSYNC once at start, so the

@@ -1089,6 +1089,22 @@ static void opt_node_stock(uint32_t node, uint32_t *count, uint32_t *glyphs)
  * reads them before the device / XAPI settings exist). The sub-lists (">") and BRIGHTNESS are not built yet. */
 #include "settings.h"
 #include "nv2a_backend.h"   /* toolkit: xbox_video_aspect (21:9 = the display's exact ratio) */
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+/* iOS (2026-11-18): "21:9" is the phone's whole screen (toolkit kernel_xbox.c: any ratio from 1.70 is the display's),
+ * shown as SCREEN; the HUD moved to the edges keeps out of the safe area (packaging/ios ios_app.m) */
+#define ORTA_IOS_SCREEN 1
+extern float orta_ios_safe_x(void);
+#endif
+#endif
+#if defined(ORTA_IOS_SCREEN)
+#define ORTA_ASPECT_21_MIN 1.70
+#define ORTA_ASPECT_21_LABEL "SCREEN"
+#else
+#define ORTA_ASPECT_21_MIN 2.30
+#define ORTA_ASPECT_21_LABEL "21:9"
+#endif
 #include <math.h>
 #include <stdarg.h>
 extern volatile int nv2a_vk_aniso;
@@ -1133,7 +1149,7 @@ static const opt_val_t k_rv[RV_N] = {
     /* 16:10 / 21:9 (night order 2026-11-07; THPS 2X v1.2.0): Orta's own 16:9 path, widened further by the port
      * (orta_aspect_* below); 21:9 = the display's exact ratio in the 21:9 range, else 64:27 (orta_aspect_21x9) */
     [RV_ASPECT]   = { "ASPECT RATIO", "aspect_ratio", "4:3", { "4:3", "16:9", "16:10", "21:9" },
-                      { "4:3", "16:9", "16:10", "21:9" }, 4 },
+                      { "4:3", "16:9", "16:10", ORTA_ASPECT_21_LABEL }, 4 },
     /* FIELD OF VIEW (night order 2026-11-07; THPS 2X v1.2.0: ORIGINAL, +5 .. +30 degrees): added to the camera angle
      * the game hands its renderer (sub_000419A0), at once. The menu font has no '+': the value is the degrees. */
     [RV_FOV]      = { "FIELD OF VIEW", "field_of_view", "0", { "0", "5", "10", "15", "20", "25", "30" },
@@ -1327,7 +1343,7 @@ static int rv_ws_menu(void) { return strcmp(settings_get("aspect_ratio", "4:3"),
 static double orta_aspect_21x9(void)
 {
     double r = xbox_video_aspect();
-    return (r >= 2.30 && r <= 2.42) ? r : 64.0 / 27.0;
+    return (r >= ORTA_ASPECT_21_MIN && r <= 2.42) ? r : 64.0 / 27.0;
 }
 static double rv_aspect_menu(void)
 {
@@ -1815,6 +1831,11 @@ void sub_0006A520(RECOMP_PARAMS)
         static uint32_t bq[ORTA_HUD_MAXQ];
         float s16 = 0.75f * f;                       /* fb px -> 16:9 layout px (0.75 / q, q = 1 / f) */
         float k = 4.0f / (3.0f * f), dmove = 320.0f * (1.0f - k);
+#if defined(ORTA_IOS_SCREEN)
+        /* iOS: the edge groups stop at the safe area (the camera cut-out, the rounded corners) - the same distance
+         * to it as to the edge at 16:9 (the Lost World iOS port does the same with its side HUD) */
+        dmove -= 640.0f * orta_ios_safe_x();
+#endif
         int m = 0;
         for (i = 0; i < n; i++) {                    /* this batch's quads only, sorted by x0 (insertion) */
             uint32_t va = s_hud_q[i];
@@ -2420,7 +2441,7 @@ static const char *opt_help_for(int view, uint32_t line)
     if (view == OPT_V_CONTROLS && line == 2)
         return "Keys and buttons for the keyboard or the controller.\nPress A to open.";
     if (view == OPT_V_VIEW)
-        return line == 0 ? "4:3 as the original, 16:9, 16:10 or 21:9.\nWider shows more at the sides.\nLeft or right, Y for the default. Needs a restart."
+        return line == 0 ? "4:3 as the original, 16:9, 16:10 or " ORTA_ASPECT_21_LABEL ".\nWider shows more at the sides.\nLeft or right, Y for the default. Needs a restart."
                          : "Degrees wider than the original camera.\nLeft or right to change, Y for the default.\nApplies at once.";
     if (view == OPT_V_PIC)
         return line == 0 ? "Brightness of the picture.\nLeft or right to change, Y for the default.\nApplies at once."

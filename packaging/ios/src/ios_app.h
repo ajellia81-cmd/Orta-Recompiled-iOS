@@ -17,6 +17,10 @@ extern "C" {
  * one) and the pad ranking (real pads before the touch pad). */
 void orta_ios_start(void);
 
+/* The game window's safe-area inset on its wider side, as a fraction of the window's width (0 before the window):
+ * the HUD at the screen's edges keeps out of it (recomp_manual.c). */
+float orta_ios_safe_x(void);
+
 /* Runs fn(arg) on a new thread with a 16 MB stack and pumps the main thread's events until it returns; returns its
  * result. Call it on the main thread, after orta_ios_start. */
 int orta_ios_run_game(int (*fn)(void *), void *arg);
