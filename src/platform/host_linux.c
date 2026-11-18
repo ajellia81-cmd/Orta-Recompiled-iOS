@@ -633,6 +633,20 @@ void *host_mutex_new(void)
     return m;
 }
 
+#if defined(__APPLE__)
+/* Darwin has no pthread_mutex_timedlock: trylock, polled every millisecond up to the limit */
+int host_mutex_take(void *m, unsigned ms)
+{
+    unsigned t;
+    for (t = 0;; t++) {
+        if (pthread_mutex_trylock((pthread_mutex_t *)m) == 0)
+            return 1;
+        if (t >= ms)
+            return 0;
+        usleep(1000);
+    }
+}
+#else
 int host_mutex_take(void *m, unsigned ms)
 {
     struct timespec ts;
@@ -642,6 +656,7 @@ int host_mutex_take(void *m, unsigned ms)
     if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
     return pthread_mutex_timedlock((pthread_mutex_t *)m, &ts) == 0;
 }
+#endif
 
 void host_mutex_give(void *m)
 {
