@@ -137,7 +137,7 @@ cmake -S packaging/ios -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     ${gen_arg[@]+"${gen_arg[@]}"}
 if [ -n "$CHECK" ]; then
     echo "[4/5] Compile check (toolkit runtime + the port's sources for iOS)"
-    cmake --build "$B" --target orta_ios_check -j "$JOBS"
+    cmake --build "$B" --target orta_ios_check -j "$JOBS" -- -k 0   # every error in one run
     echo; echo "Compile check passed."
     exit 0
 fi

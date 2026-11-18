@@ -268,7 +268,7 @@ index ec863b3..372e97a 100644
      dci.pNext = &f2;
      dci.queueCreateInfoCount = 1;
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index b203c49..a39d906 100644
+index b203c49..b1fa854 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
 @@ -33,7 +33,15 @@
@@ -345,7 +345,7 @@ index b203c49..a39d906 100644
 +    if (fd < 0) {
 +        const char *td = getenv("TMPDIR");
 +        char path[1024];
-+        snprintf(path, sizeof path, "%s/%s_%ld_XXXXXX", (td && *td) ? td : "/tmp", base, seq);
++        snprintf(path, sizeof path, "%s/%s_%ld_XXXXXX", (td && *td) ? td : "/tmp", base, (long)seq);
 +        fd = mkstemp(path);
 +        if (fd >= 0) unlink(path);
 +    }
@@ -433,3 +433,16 @@ index b203c49..a39d906 100644
  /* CONTEXT <-> the arm64 signal frame (mcontext = the kernel's struct sigcontext on glibc and bionic). */
  static void veh_ctx_from(CONTEXT *c, const ucontext_t *uc, const siginfo_t *si, DWORD code)
  {
+diff --git a/src/platform/win32_compat.h b/src/platform/win32_compat.h
+index af4b7f5..a67d5c5 100644
+--- a/src/platform/win32_compat.h
++++ b/src/platform/win32_compat.h
+@@ -441,7 +441,7 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
+  * SIGSEGV / SIGBUS / SIGILL / SIGFPE / SIGTRAP with an EXCEPTION_RECORD and a CONTEXT (xbox_winnt.h) built from the
+  * signal's ucontext; EXCEPTION_CONTINUE_EXECUTION writes the CONTEXT back. Other POSIX hosts: registration fails
+  * (returns NULL), nothing fires. See win32_compat.c. */
+-#ifdef __linux__
++#if defined(__linux__) || defined(__APPLE__)       /* Apple: arm64 Darwin has the handlers too (iOS port) */
+ typedef struct _EXCEPTION_POINTERS
+ {
+     PEXCEPTION_RECORD ExceptionRecord;
