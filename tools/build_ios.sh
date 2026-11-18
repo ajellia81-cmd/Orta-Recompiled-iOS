@@ -134,7 +134,7 @@ cmake -S packaging/ios -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DVULKAN_INCLUDE="$DEPS/src/Vulkan-Headers/include" -Dglslang_DIR="$GL/lib/cmake/glslang" \
     -DORTA_BUNDLE_ID="$BUNDLE_ID" \
     -DXR_GAME_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" -DXR_TOOLKIT_COMMIT="$TK_TAG" \
-    "${gen_arg[@]}" >/dev/null
+    ${gen_arg[@]+"${gen_arg[@]}"}
 if [ -n "$CHECK" ]; then
     echo "[4/5] Compile check (toolkit runtime + the port's sources for iOS)"
     cmake --build "$B" --target orta_ios_check -j "$JOBS"
