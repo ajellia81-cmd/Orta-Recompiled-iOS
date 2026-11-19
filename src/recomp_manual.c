@@ -939,7 +939,7 @@ static int opt_set_add(int which, uint32_t key, int depth)
 }
 
 /* x_lo..x_hi: the column filter of the move mode (labels / bar left of OPT_VALUE_X, values right of it). */
-static uint32_t s_walk_x_lo = 21, s_walk_x_hi = 600;
+static uint32_t s_walk_x_lo = 21, s_walk_x_hi = 639;
 /* diagnosis (2026-11-20, the right side's glints fly up from below when OPTIONS opens, fine in SOUND / RECOMP):
  * the words the screen's first layout moves right of x 400 - record id, place before and after */
 static int s_walk_log;
@@ -961,6 +961,26 @@ static int opt_shift_walk(uint32_t p, int depth, uint32_t old_y, int dy)
     int i, n = 0;
     if (depth > 3 || p < 0x00400000u || p >= 0x04000000u || !opt_set_add(0, p, depth)) return 0;
     if (opt_is_font_table(p)) return 0;
+    {
+        /* A groove path block: the keys the right side's glints run along, a run of position words reaching the
+         * screen's right edge (x 601..639). Moving the part of it inside a row band split the path between the
+         * band (parked at row 40+, y ~1800) and the rest: the glints flew up from below the screen (iPhone video
+         * 2026-11-20; [WALK] record 150: x 639 / 634 / 628, y 29 / 26 / 25). Cutting the walk at x 600 (b0c26ea)
+         * still moved the path's part left of 600 - more flying. Now such a block is never moved, whole. */
+        int edge = 0;
+        for (i = 0; i < 64 && edge < 2; i++) {
+            uint32_t v = GUEST32(p + 4 * (uint32_t)i), x = v & 0xFFFFu, y = v >> 16;
+            if (x > 600 && x < 640 && y < 480) edge++;
+        }
+        if (edge >= 2) {
+            if (s_walk_log > 0) {
+                s_walk_log--;
+                fprintf(stderr, "[WALK] line %u record %03X block %08X: groove path, left alone\n", s_walk_line,
+                        s_walk_id, p);
+            }
+            return 0;
+        }
+    }
     for (i = 0; i < 64; i++) {
         uint32_t a = p + 4 * (uint32_t)i, v = GUEST32(a), x = v & 0xFFFFu, y = v >> 16;
         /* below the row: +12 for the value column (volume dots' wave keys go to +8), only +5 left of it - the next
@@ -1004,11 +1024,7 @@ static int opt_shift_line(int line, int from_row, int to_row, int mode)
     if (dy == 0) return 0;
     if (++s_gen == 0) s_gen = 1;   /* new generation = both sets empty */
     s_walk_x_lo = mode == OPT_MV_VALUE ? OPT_VALUE_X : 21u;
-    /* Right of x 600: the screen's right-edge grooves, whose keys the glints run along - the first layout moved
-     * them with the lines (iPhone log cec5cc1f [WALK]: line 0's record 150 x 628..639 y 25..29 -> 1825..1829, line
-     * 3's record 158 x 633 y 132 -> 1932), so the glints flew up from below the screen on OPTIONS (2026-11-20).
-     * No label or value reaches past 600 (volume dots end at 580). */
-    s_walk_x_hi = mode == OPT_MV_LABEL ? OPT_VALUE_X - 1u : 600u;
+    s_walk_x_hi = mode == OPT_MV_LABEL ? OPT_VALUE_X - 1u : 639u;   /* groove path blocks: opt_shift_walk */
     for (; n && guard < 4096; n = GUEST32(n + 0x18), guard++) {
         uint32_t id = GUEST32(n), data = GUEST32(n + 4), sib;
         int links;
