@@ -18,6 +18,10 @@ on:
         type: choice
         options: [ipa, check]
         default: ipa
+      upload_gen:
+        description: "also put the lifted C (build/ios/gen, made from the disc) in the private release 'gen' - for analysis"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -88,6 +92,17 @@ jobs:
           gh release edit latest -R "$PRIVATE_REPO" --notes "Built from ${GITHUB_SHA::7} (run ${GITHUB_RUN_NUMBER})."
           echo "::notice::OrtaRecomp.ipa uploaded to the private repository's release 'latest'"
         # never published here
+      - name: Lifted C (private repository, release "gen")
+        if: inputs.mode == 'ipa' && inputs.upload_gen
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          tar -C build/ios -czf gen.tar.gz gen
+          ls -l gen.tar.gz
+          gh release view gen -R "$PRIVATE_REPO" >/dev/null 2>&1 ||
+            gh release create gen -R "$PRIVATE_REPO" --title "lifted C" --notes "build/ios/gen of the latest build that asked for it"
+          gh release upload gen gen.tar.gz -R "$PRIVATE_REPO" --clobber
+          rm -f gen.tar.gz
       - name: Clean up
         if: always()
         run: rm -rf default.xbe seed icon.png out/ios build/ios/gen build/ios/pipe

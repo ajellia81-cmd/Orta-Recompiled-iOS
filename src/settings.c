@@ -9,6 +9,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#define SETTINGS_ASYNC 1
+#include <pthread.h>
+#endif
+#endif
 
 #define SETTINGS_ENV_PREFIX "ORTA_"
 #define MAX_LINES 256
@@ -97,6 +104,61 @@ const char *settings_get(const char *key, const char *def)
     return k >= 0 ? value_of(k) : def;
 }
 
+#if defined(SETTINGS_ASYNC)
+/* iOS: the file (with its fsync) is written by a thread of its own - on the game's thread every change in the
+ * options menus held the frame long enough for the sound to break (iPhone 18 Pro Max, 2026-11-19). The newest text
+ * wins; the thread writes it as soon as the write before it is done. */
+static pthread_mutex_t s_w_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t s_w_cv = PTHREAD_COND_INITIALIZER;
+static char *s_w_buf;
+static size_t s_w_n;
+
+static void *settings_writer(void *unused)
+{
+    (void)unused;
+    for (;;) {
+        char *b;
+        size_t n;
+        pthread_mutex_lock(&s_w_mx);
+        while (!s_w_buf)
+            pthread_cond_wait(&s_w_cv, &s_w_mx);
+        b = s_w_buf;
+        n = s_w_n;
+        s_w_buf = NULL;
+        pthread_mutex_unlock(&s_w_mx);
+        if (!host_write_file_atomic(s_path, s_pending_dir, b, n))
+            fprintf(stderr, "[SETTINGS] cannot write %s\n", s_path);
+        free(b);
+    }
+    return NULL;
+}
+
+static void settings_write_async(char *buf, size_t n)
+{
+    static int started;
+    pthread_mutex_lock(&s_w_mx);
+    if (!started) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, settings_writer, NULL) == 0) {
+            pthread_detach(t);
+            started = 1;
+        }
+    }
+    if (!started) {                           /* no thread: as before */
+        pthread_mutex_unlock(&s_w_mx);
+        if (!host_write_file_atomic(s_path, s_pending_dir, buf, n))
+            fprintf(stderr, "[SETTINGS] cannot write %s\n", s_path);
+        free(buf);
+        return;
+    }
+    free(s_w_buf);
+    s_w_buf = buf;
+    s_w_n = n;
+    pthread_cond_signal(&s_w_cv);
+    pthread_mutex_unlock(&s_w_mx);
+}
+#endif
+
 static void write_file(void)
 {
     size_t n = 0, at = 0;
@@ -112,9 +174,13 @@ static void write_file(void)
         at += l;
         buf[at++] = '\n';
     }
+#if defined(SETTINGS_ASYNC)
+    settings_write_async(buf, at);            /* takes buf */
+#else
     if (!host_write_file_atomic(s_path, s_pending_dir, buf, at))
         fprintf(stderr, "[SETTINGS] cannot write %s\n", s_path);
     free(buf);
+#endif
 }
 
 void settings_set(const char *key, const char *value)
