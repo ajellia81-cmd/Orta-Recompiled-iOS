@@ -379,7 +379,7 @@ index 8bb17ea..961c541 100644
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index ec863b3..97041cc 100644
+index ec863b3..2ac172d 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -74,6 +74,14 @@
@@ -512,7 +512,22 @@ index ec863b3..97041cc 100644
  #endif
  }
  #endif
-@@ -2881,6 +2987,10 @@ static void *compile_thread(void *arg)
+@@ -977,6 +1083,14 @@ static void scale_failed(void)
+             s_scale_x, s_scale, 1.0 + 0.25 * i);
+ }
+ 
++/* The scale the guest's frame is rendered at now (host pixels per guest pixel, x and y; the port snaps its 2D to
++ * whole host pixels with it - Panzer Dragoon Orta iOS, 2026-11-19) */
++void nv2a_vk_render_scale_get(double *kx, double *ky)
++{
++    if (kx) *kx = s_scale_x;
++    if (ky) *ky = s_scale;
++}
++
+ void nv2a_vk_set_render_scale(double factor, int wide)
+ {
+     s_opt_wide = wide ? 1 : 0;
+@@ -2881,6 +2995,10 @@ static void *compile_thread(void *arg)
      glslang_shader_t *sh;
      glslang_program_t *pr;
  
@@ -523,7 +538,7 @@ index ec863b3..97041cc 100644
      memset(&in, 0, sizeof in);
      in.language = GLSLANG_SOURCE_GLSL;
      in.stage = j->stage;
-@@ -2969,6 +3079,7 @@ static int cache_path(char *out, size_t cap, const char *name)
+@@ -2969,6 +3087,7 @@ static int cache_path(char *out, size_t cap, const char *name)
  typedef struct { uint64_t hash; uint32_t stage, nwords; uint32_t *words; } SpvEnt;
  static SpvEnt *s_spv;
  static uint32_t s_nspv, s_spv_cap, s_spv_hits;
@@ -531,7 +546,7 @@ index ec863b3..97041cc 100644
  
  static uint64_t text_hash(const char *t, uint32_t stage)
  {
-@@ -3063,15 +3174,19 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
+@@ -3063,15 +3182,19 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
      VkShaderModule m = VK_NULL_HANDLE;
  
      uint64_t hash = text_hash(src, (uint32_t)stage);
@@ -552,7 +567,7 @@ index ec863b3..97041cc 100644
      VT("compile %s (%u bytes of GLSL)\n", stage == GLSLANG_STAGE_VERTEX ? "vs" : "fs",
         (unsigned)strlen(src));
  #if defined(__SWITCH__)
-@@ -3102,8 +3217,12 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
+@@ -3102,8 +3225,12 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
      ci.pCode = j.words;
      VT("  SPIR-V %u words -> vkCreateShaderModule\n", (unsigned)j.nwords);
      vkCreateShaderModule(s_dev, &ci, NULL, &m);
@@ -567,7 +582,7 @@ index ec863b3..97041cc 100644
      free(j.words);
      return m;
  }
-@@ -3241,6 +3360,28 @@ static void prog_rec_batch(const ProgRec *rec, Nv2aRawBatch *bb, uint32_t n)
+@@ -3241,6 +3368,28 @@ static void prog_rec_batch(const ProgRec *rec, Nv2aRawBatch *bb, uint32_t n)
      bb->vp_prog_gen = 0x80000000u + n;          /* hash it: not an executor version */
  }
  
@@ -596,7 +611,7 @@ index ec863b3..97041cc 100644
  static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
  {
      static uint32_t last_gen;
-@@ -3250,8 +3391,8 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+@@ -3250,8 +3399,8 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
      uint64_t vkey = 0;
      uint32_t bucket;
      VkProg *p, *victim = NULL;
@@ -606,7 +621,7 @@ index ec863b3..97041cc 100644
  
      if (b->xform == 2) {
          if (b->vp_prog_gen != last_gen || !last_vkey) {
-@@ -3273,6 +3414,12 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+@@ -3273,6 +3422,12 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
              return c;
          }
      }
@@ -619,7 +634,7 @@ index ec863b3..97041cc 100644
      for (i = 0; i < VK_MAX_PROG; i++) {
          VkProg *c = &s_prog[i];
          if (!c->vs) { if (!victim || victim->vs) victim = c; }
-@@ -3286,6 +3433,7 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+@@ -3286,6 +3441,7 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
              if (*at == me) { *at = p->next; break; }
              at = &s_prog[*at - 1].next;
          }
@@ -627,7 +642,7 @@ index ec863b3..97041cc 100644
          pipes_forget_prog((int)(p - s_prog));
          vkDestroyShaderModule(s_dev, p->vs, NULL);
          vkDestroyShaderModule(s_dev, p->fs, NULL);
-@@ -3293,20 +3441,15 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+@@ -3293,20 +3449,15 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
      }
      memset(p, 0, sizeof *p);
  
@@ -655,7 +670,7 @@ index ec863b3..97041cc 100644
      if (!p->vs || !p->fs) {
          if (p->vs) vkDestroyShaderModule(s_dev, p->vs, NULL);
          if (p->fs) vkDestroyShaderModule(s_dev, p->fs, NULL);
-@@ -3440,12 +3583,9 @@ static void pipe_rec_append(const PipeKey *k)
+@@ -3440,12 +3591,9 @@ static void pipe_rec_append(const PipeKey *k)
      }
  }
  
@@ -670,7 +685,7 @@ index ec863b3..97041cc 100644
      VkGraphicsPipelineCreateInfo ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
      VkPipelineShaderStageCreateInfo st[2];
      VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-@@ -3484,23 +3624,14 @@ static VkPipeline pipe_get(const PipeKey *k)
+@@ -3484,23 +3632,14 @@ static VkPipeline pipe_get(const PipeKey *k)
      VkVertexInputBindingDescription vb[NV2A_RAW_ATTRS];
      VkVertexInputAttributeDescription va[NV2A_RAW_ATTRS];
      VkPipeline pipe = VK_NULL_HANDLE;
@@ -696,7 +711,7 @@ index ec863b3..97041cc 100644
      st[1].pName = "main";
      ia.topology = k->topo == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
                  : k->topo == 1 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
-@@ -3565,13 +3696,32 @@ static VkPipeline pipe_get(const PipeKey *k)
+@@ -3565,13 +3704,32 @@ static VkPipeline pipe_get(const PipeKey *k)
      {
          uint64_t t0 = hz_now();
          VkResult pr = vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &pipe);
@@ -731,7 +746,7 @@ index ec863b3..97041cc 100644
      if (s_npipes == VK_MAX_PIPE) {
          LOGE("pipeline table full\n");
          return pipe;                          /* leaks; never seen in practice */
-@@ -3587,6 +3737,277 @@ static VkPipeline pipe_get(const PipeKey *k)
+@@ -3587,6 +3745,277 @@ static VkPipeline pipe_get(const PipeKey *k)
      return pipe;
  }
  
@@ -1009,7 +1024,7 @@ index ec863b3..97041cc 100644
  static VkProg *prog_find(uint64_t vkey, const Nv2aPshKey *pk)
  {
      int i;
-@@ -3756,15 +4177,19 @@ static int sc_extent_changed(void)
+@@ -3756,15 +4185,19 @@ static int sc_extent_changed(void)
      sc_choose(&caps, &e, &pre);
      return e.width != 0xFFFFFFFFu && (e.width != s_sc_extent.width || e.height != s_sc_extent.height);
  }
@@ -1030,7 +1045,7 @@ index ec863b3..97041cc 100644
      }
      return true;
  }
-@@ -3814,6 +4239,19 @@ static int surface_recreate(void)
+@@ -3814,6 +4247,19 @@ static int surface_recreate(void)
  static int sc_ready(void)
  {
      static unsigned retry;
@@ -1050,7 +1065,7 @@ index ec863b3..97041cc 100644
      if (SDL_GetAtomicInt(&s_sc_background))
          return 0;
      if (!SDL_GetAtomicInt(&s_sc_lost) && s_swapchain)
-@@ -4184,7 +4622,7 @@ static int ready(void)
+@@ -4184,7 +4630,7 @@ static int ready(void)
      VkPhysicalDeviceExtendedDynamicStateFeaturesEXT feds =
          { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT };
      VkPhysicalDeviceFeatures have;
@@ -1059,7 +1074,7 @@ index ec863b3..97041cc 100644
      uint32_t ndext = 0;
      const char *layers[1];
      uint32_t nlayers = 0;
-@@ -4444,7 +4882,7 @@ static int ready(void)
+@@ -4444,7 +4890,7 @@ static int ready(void)
          snprintf(w, sizeof w, "The window's Vulkan surface could not be created (SDL: %s).", SDL_GetError());
          vk_fatal(w);
      }
@@ -1068,7 +1083,7 @@ index ec863b3..97041cc 100644
      if (!s_headless)
          SDL_AddEventWatch(sc_event_watch, NULL);    /* background / foreground: the surface's life */
  #endif
-@@ -4480,6 +4918,13 @@ static int ready(void)
+@@ -4480,6 +4926,13 @@ static int ready(void)
                      s_have_budget = 1;
                      break;
                  }
@@ -1082,7 +1097,7 @@ index ec863b3..97041cc 100644
      }
      dci.pNext = &f2;
      dci.queueCreateInfoCount = 1;
-@@ -8719,6 +9164,21 @@ static void vk_flip(void)
+@@ -8719,6 +9172,21 @@ static void vk_flip(void)
                      cmx = s_crop_mx;
                      cmy = s_crop_my;
                  }
@@ -1104,6 +1119,18 @@ index ec863b3..97041cc 100644
                  /* the window's own aspect (4:3 or 16:9, set at its creation) less the margins - per window,
                   * not per frame, so a title's 4:3 menus and 16:9 play do not resize it back and forth */
                  if (s_dm_cur == NV2A_VK_DISPLAY_WINDOWED && !s_boot_on && s_win_aspect > 0.0f)
+diff --git a/src/nv2a_vk/nv2a_vk.h b/src/nv2a_vk/nv2a_vk.h
+index 103b966..1e0b767 100644
+--- a/src/nv2a_vk/nv2a_vk.h
++++ b/src/nv2a_vk/nv2a_vk.h
+@@ -51,6 +51,7 @@ float nv2a_vk_display_hz(void);
+  * with a log line if the surfaces would not fit. RECOMP_GL_SCALE[_X] set in
+  * the environment overrides it. */
+ void nv2a_vk_set_render_scale(double factor, int wide);
++void nv2a_vk_render_scale_get(double *kx, double *ky);
+ /* 1 if the device can hold the current surfaces at that factor (image
+  * limits, no earlier allocation failure there -- no free-VRAM estimate:
+  * maintainer, 2026-10-26), 0 if the menu should refuse it. A factor that
 diff --git a/src/platform/host_vblank.c b/src/platform/host_vblank.c
 index 66434b5..45c6897 100644
 --- a/src/platform/host_vblank.c

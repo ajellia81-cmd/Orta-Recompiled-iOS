@@ -1868,6 +1868,31 @@ static int s_hud_n;
 static float orta_qx(uint32_t va) { uint32_t b = GUEST32(va); float v; memcpy(&v, &b, 4); return v; }
 
 static int hud_in_play(void);
+extern void nv2a_vk_render_scale_get(double *kx, double *ky);
+/* The 2D on whole host pixels: the frame is rendered at a scale that is no whole number (iPhone: 4.48 x 2.946),
+ * so a one-row line came out 2 or 3 host pixels thick depending on its row - the menu cursor lines differed from
+ * item to item (2026-11-19). Each corner of a 2D quad is moved to the nearest host pixel edge (at most half a
+ * host pixel), so the same guest size is always the same host size. Scale 1: nothing. */
+static void hud_snap_quad(uint32_t vp)
+{
+    double kx, ky;
+    int j;
+    nv2a_vk_render_scale_get(&kx, &ky);
+    if (!(kx > 1.01 || ky > 1.01))
+        return;
+    for (j = 0; j < 4; j++) {
+        uint32_t a = vp + (uint32_t)j * 0x20u, b;
+        float x = orta_qx(a), y = orta_qx(a + 4u);
+        if (!(x > -2000.0f && x < 2000.0f && y > -2000.0f && y < 2000.0f))
+            continue;
+        x = (float)(floor((double)x * kx + 0.5) / kx);
+        y = (float)(floor((double)y * ky + 0.5) / ky);
+        memcpy(&b, &x, 4);
+        GUEST32(a) = b;
+        memcpy(&b, &y, 4);
+        GUEST32(a + 4u) = b;
+    }
+}
 /* Menus: the options views park the lines they do not show far below the screen (row 40 + line, y ~1250) and
  * move them back when a view opens; a small sparkle of a line keeps one of its keys where it was and flies from
  * below the screen to the line in a few frames (~70 rows a frame, the Xbox original has no such flight - iPhone
@@ -1876,7 +1901,7 @@ static int hud_in_play(void);
 static void menu_flight_hide(uint32_t arg, uint32_t vp)
 {
     static struct { uint32_t arg; float y; uint32_t t; } seen[128];
-    uint32_t now = (uint32_t)SDL_GetTicks(), h = (arg >> 2) * 2654435761u >> 25, b;
+    uint32_t now = (uint32_t)SDL_GetTicks(), h, b;
     float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f;
     int j, k, hide = 0;
     for (j = 0; j < 4; j++) {
@@ -1886,8 +1911,13 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
         if (y < y0) y0 = y;
         if (y > y1) y1 = y;
     }
-    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f))
+    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f) || !(x0 > -2000.0f && x1 < 2000.0f))
         return;
+    /* one sprite record draws many sparkles (the groove glints share theirs - keyed by the record alone, every
+     * glint but one hid: 2026-11-19 video): record + an 8 px column. The flight is straight up or down; a glint
+     * that creeps into the next column starts a new entry */
+    arg ^= ((uint32_t)(int)(0.5f * (x0 + x1) / 8.0f) + 1000u) * 0x9E3779B1u;
+    h = (arg >> 3) * 2654435761u >> 25;
     for (k = 0; k < 4; k++) {                        /* open addressing, 4 tries */
         int i = (int)((h + (uint32_t)k) & 127u);
         if (seen[i].arg == arg || seen[i].arg == 0 || now - seen[i].t > 1000u) {
@@ -1911,8 +1941,11 @@ void sub_00069A90(RECOMP_PARAMS)
     float f = orta_aspect_factor();
     uint32_t arg = GUEST32(g_esp + 4), vp0 = GUEST32(0x46F890u);
     ORTA_WS_SQUEEZE_CALL(sub_00069A90_gen);
-    if (GUEST32(0x46F890u) == vp0 + 0x80u && !hud_in_play())
-        menu_flight_hide(arg, vp0);
+    if (GUEST32(0x46F890u) == vp0 + 0x80u) {
+        hud_snap_quad(vp0);
+        if (!hud_in_play())
+            menu_flight_hide(arg, vp0);
+    }
     if (!(f > 0.0f) || !GUEST32(0x342754u) || (GUEST8(arg + 2u) & 8u) || GUEST32(0x345DD0u) == 1u)
         return;
     if (GUEST32(0x46F890u) == vp0 + 0x80u && s_hud_n < ORTA_HUD_MAXQ)
@@ -2034,6 +2067,12 @@ void sub_0006A520(RECOMP_PARAMS)
         static uint32_t bq[ORTA_HUD_MAXQ];
         float s16 = 0.75f * f;                       /* fb px -> 16:9 layout px (0.75 / q, q = 1 / f) */
         float k = 4.0f / (3.0f * f), dmove = 320.0f * (1.0f - k);
+        {
+            double kx_, ky_;                         /* the move on whole host pixels too (hud_snap_quad) */
+            nv2a_vk_render_scale_get(&kx_, &ky_);
+            if (kx_ > 1.01)
+                dmove = (float)(floor((double)dmove * kx_ + 0.5) / kx_);
+        }
         int m = 0;
         for (i = 0; i < n; i++) {                    /* this batch's quads only, sorted by x0 (insertion) */
             uint32_t va = s_hud_q[i];
@@ -2869,9 +2908,11 @@ void sub_000AF580(RECOMP_PARAMS)
         /* 0x04000000 = LEFT, 0x08000000 = RIGHT (run 20261104_090544_opt_views14: a scripted left arrived as
          * 0x44004000; down = 0x22002000, B = 0x00000002) */
         int dir = (bits & 0x08000000u) ? 1 : -1;
+        uint64_t t0_ = SDL_GetTicksNS(), t1_;        /* the change's cost in the log (sound broke at changes) */
         GUEST32(obj + 0x18) = bits & ~(0x08000000u | 0x04000000u);   /* not the stock line's own value */
         g_ecx = obj;
         sub_000AF580_gen(ctx, base);
+        t1_ = SDL_GetTicksNS();
         if (s_opt_view == OPT_V_BIND) { if (bind_lr(cur, dir)) opt_view_texts(OPT_V_BIND); }
         else if (rv_step(s_opt_view, (int)cur, dir)) {
             char buf[48];
@@ -2881,7 +2922,8 @@ void sub_000AF580(RECOMP_PARAMS)
                 opt_view_texts(s_opt_view);                   /* RENDER RESOLUTION lists the new aspect's sizes */
             else
                 opt_line_text((int)cur, buf);                 /* SetText on its instances at the next call */
-            fprintf(stderr, "[OPT] view %d line %u -> %s\n", s_opt_view, cur, buf);
+            fprintf(stderr, "[OPT] view %d line %u -> %s (stock handler %.1f ms, ours %.1f ms)\n", s_opt_view, cur, buf,
+                    (t1_ - t0_) / 1e6, (SDL_GetTicksNS() - t1_) / 1e6);
         }
         GUEST32(obj + 0x18) = bits;
         return;
