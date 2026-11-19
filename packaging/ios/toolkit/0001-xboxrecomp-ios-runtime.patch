@@ -81,6 +81,123 @@ index 4c19c68..179eb31 100644
      if (!g_sdl_stream || n <= 0)
          return 0;
      if (SDL_GetAudioStreamQueued(g_sdl_stream) >= XA2_NUM_BUFS * XA2_BUF_SAMPLES * bytes_per_frame)
+diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
+index 7d43f7d..b573996 100644
+--- a/src/input/xinput_device.c
++++ b/src/input/xinput_device.c
+@@ -16,6 +16,12 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++#define XI_IOS 1
++#endif
++#endif
+ 
+ /* ---- bindings per device (xinput_bind.h) ---------------------------------
+  * The keyboard's default is the title's keymap, a pad's the positional
+@@ -423,6 +429,74 @@ static void sort_pads(void)
+     fflush(stderr);
+ }
+ 
++/* A pad's vibration made ready (iOS): one millisecond at the faintest level starts its haptics engine AND each
++ * motor's player - a zero level stops short of the players, which the title's first rumble then had to make, a
++ * long hitch at times (Lost World iOS port, 2026-11-19). Silent. */
++static void pad_rumble_warm(SDL_Gamepad *g)
++{
++#if defined(XI_IOS)
++    SDL_PropertiesID pr = g ? SDL_GetGamepadProperties(g) : 0;
++    if (pr && SDL_GetBooleanProperty(pr, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false))
++        SDL_RumbleGamepad(g, 1, 1, 1);
++    if (pr && SDL_GetBooleanProperty(pr, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, false))
++        SDL_RumbleGamepadTriggers(g, 1, 1, 1);
++#else
++    (void)g;
++#endif
++}
++
++#if defined(XI_IOS)
++/* iOS: the pads' haptics engines stop in the background and SDL never starts them again - after a return the
++ * pads did not vibrate any more. Back in front, every pad is opened afresh and its vibration readied at once (the
++ * hitch falls while the screen comes back, not at the first rumble); going away, the motors are stopped (the
++ * title's last setting is held for 10 s). The Lost World iOS port's handling (Gamepads::revive, 2026-11-19). */
++static SDL_AtomicInt s_pad_revive, s_pad_quiet;
++static bool SDLCALL pad_app_watch(void *u, SDL_Event *e)
++{
++    (void)u;
++    if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND)
++        SDL_SetAtomicInt(&s_pad_revive, 1);
++    else if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND)
++        SDL_SetAtomicInt(&s_pad_quiet, 1);
++    return true;
++}
++
++static void pads_app_state(void)
++{
++    int p, n = 0;
++    if (SDL_GetAtomicInt(&s_pad_quiet) && SDL_SetAtomicInt(&s_pad_quiet, 0))
++        for (p = 0; p < XBOX_MAX_CONTROLLERS; p++)
++            if (g_pads[p]) {
++                SDL_RumbleGamepad(g_pads[p], 0, 0, 0);
++                SDL_RumbleGamepadTriggers(g_pads[p], 0, 0, 0);
++            }
++    if (!SDL_GetAtomicInt(&s_pad_revive) || !SDL_SetAtomicInt(&s_pad_revive, 0))
++        return;
++    {
++        Uint64 t0 = SDL_GetTicksNS();
++        int gone = 0;
++        for (p = 0; p < XBOX_MAX_CONTROLLERS; p++) {
++            if (!g_pads[p])
++                continue;
++            SDL_CloseGamepad(g_pads[p]);
++            g_pads[p] = SDL_OpenGamepad(g_pad_id[p]);
++            if (!g_pads[p]) {                 /* gone while away: as a disconnection */
++                g_pad_id[p] = 0;
++                gone = 1;
++                continue;
++            }
++            pad_rumble_warm(g_pads[p]);
++            n++;
++        }
++        if (n || gone)
++            fprintf(stderr, "  INPUT: back in front - %d pad(s) opened again, vibration ready (%.0f ms)\n", n,
++                    (SDL_GetTicksNS() - t0) / 1e6);
++        if (gone)
++            sort_pads();
++    }
++}
++#endif
++
+ /* Open new pads and drop removed ones, at most every 500 ms: a title polls
+  * every frame, and enumerating each time would cost more than the read. */
+ static void refresh_pads(void)
+@@ -435,6 +509,16 @@ static void refresh_pads(void)
+ 
+     if (!SDL_WasInit(SDL_INIT_GAMEPAD))
+         return;
++#if defined(XI_IOS)
++    {
++        static int watch;
++        if (!watch) {
++            watch = 1;
++            SDL_AddEventWatch(pad_app_watch, NULL);
++        }
++        pads_app_state();
++    }
++#endif
+     now = SDL_GetTicks();
+     if (last && now - last < 500)
+         return;
+@@ -473,6 +557,7 @@ static void refresh_pads(void)
+             snprintf(env_key, sizeof env_key, "PAD_%s", g_pad_guid[p]);
+             snprintf(store_key, sizeof store_key, "bind.pad.%s", g_pad_guid[p]);
+             bind_load(XBOX_BIND_PAD, env_key, "PAD", store_key, &s_pad_def, &g_pad_own[p], "pad");
++            pad_rumble_warm(g_pads[p]);       /* (iOS: ready before the title's first rumble) */
+             fflush(stderr);
+         }
+     }
 diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
 index f2dabc9..751059c 100644
 --- a/src/kernel/kernel_xbox.c
