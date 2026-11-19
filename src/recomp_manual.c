@@ -1867,11 +1867,52 @@ static int s_hud_n;
 
 static float orta_qx(uint32_t va) { uint32_t b = GUEST32(va); float v; memcpy(&v, &b, 4); return v; }
 
+static int hud_in_play(void);
+/* Menus: the options views park the lines they do not show far below the screen (row 40 + line, y ~1250) and
+ * move them back when a view opens; a small sparkle of a line keeps one of its keys where it was and flies from
+ * below the screen to the line in a few frames (~70 rows a frame, the Xbox original has no such flight - iPhone
+ * video 2026-11-19, OPTIONS). Outside play, a small sprite (<= 16 x 16) that moved more than 45 rows since the
+ * frame before is not drawn until it settles; the groove glints creep a row a frame, a cursor jumps 30. */
+static void menu_flight_hide(uint32_t arg, uint32_t vp)
+{
+    static struct { uint32_t arg; float y; uint32_t t; } seen[128];
+    uint32_t now = (uint32_t)SDL_GetTicks(), h = (arg >> 2) * 2654435761u >> 25, b;
+    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f;
+    int j, k, hide = 0;
+    for (j = 0; j < 4; j++) {
+        float x = orta_qx(vp + (uint32_t)j * 0x20u), y = orta_qx(vp + (uint32_t)j * 0x20u + 4u);
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+    }
+    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f))
+        return;
+    for (k = 0; k < 4; k++) {                        /* open addressing, 4 tries */
+        int i = (int)((h + (uint32_t)k) & 127u);
+        if (seen[i].arg == arg || seen[i].arg == 0 || now - seen[i].t > 1000u) {
+            if (seen[i].arg == arg && now - seen[i].t <= 100u && fabsf(y0 - seen[i].y) > 45.0f)
+                hide = 1;
+            seen[i].arg = arg;
+            seen[i].y = y0;
+            seen[i].t = now;
+            break;
+        }
+    }
+    if (hide) {
+        memcpy(&b, &off, 4);
+        for (j = 0; j < 4; j++)
+            GUEST32(vp + (uint32_t)j * 0x20u) = b;
+    }
+}
+
 void sub_00069A90(RECOMP_PARAMS)
 {
     float f = orta_aspect_factor();
     uint32_t arg = GUEST32(g_esp + 4), vp0 = GUEST32(0x46F890u);
     ORTA_WS_SQUEEZE_CALL(sub_00069A90_gen);
+    if (GUEST32(0x46F890u) == vp0 + 0x80u && !hud_in_play())
+        menu_flight_hide(arg, vp0);
     if (!(f > 0.0f) || !GUEST32(0x342754u) || (GUEST8(arg + 2u) & 8u) || GUEST32(0x345DD0u) == 1u)
         return;
     if (GUEST32(0x46F890u) == vp0 + 0x80u && s_hud_n < ORTA_HUD_MAXQ)
