@@ -68,8 +68,19 @@ int orta_ios_run_game(int (*fn)(void *), void *arg)
 
 static int s_native_lines;            /* the screen's short side in pixels (1320 on an iPhone 18 Pro Max) */
 
+static int s_crop_y;                  /* rows of 480 the present cuts off at the top and the bottom (main.c) */
+
+void orta_ios_set_crop_y(int lines)
+{
+    s_crop_y = lines > 0 && lines < 120 ? lines : 0;
+}
+
+/* the frame's lines that put the rows shown 1:1 on the screen's pixels: 1320 x 480 / 448 = 1414 with Orta's 16 + 16
+ * cut off (the 448 in between become the screen's 1320) */
 int orta_ios_native_lines(void)
 {
+    if (s_crop_y > 0 && s_native_lines > 0)
+        return (s_native_lines * 480 + (480 - 2 * s_crop_y) / 2) / (480 - 2 * s_crop_y);
     return s_native_lines;
 }
 

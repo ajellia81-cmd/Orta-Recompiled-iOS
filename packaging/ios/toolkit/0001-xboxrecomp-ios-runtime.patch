@@ -198,8 +198,45 @@ index 7d43f7d..b573996 100644
              fflush(stderr);
          }
      }
+diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
+index 110fdbd..c660811 100644
+--- a/src/kernel/kernel_bridge.c
++++ b/src/kernel/kernel_bridge.c
+@@ -2488,6 +2488,7 @@ static void bridge_HalReadSMCTrayState(X86Ctx *ctx)
+  * that ISR (burnout3-sw 0bf84b5, kernel_bridge.c). */
+ static uint32_t g_vblank_dpc;
+ static RECOMP_TLS int t_in_vblank_isr;
++static RECOMP_TLS int t_timer_thread;          /* the timer thread: it drains what it queues in the same pass */
+ extern void xbox_Nv2aVblankHold(void);
+ extern void xbox_Nv2aVblankRelease(void);
+ extern void xbox_Nv2aVblankDrop(void);
+@@ -2678,6 +2679,16 @@ static int dpc_queue_insert(uint32_t dpc, uint32_t arg1, uint32_t arg2)
+     BRIDGE_MEM8(dpc + 2) = 1;
+     g_dpc_tail = next;
+     LeaveCriticalSection(&g_dpc_lock);
++#if defined(__APPLE__)
++    /* A guest thread's DPC wakes the timer thread at once (2026-11-19, iOS): it waited for the next vblank or
++     * 10 ms before - 3627 of 12312 DPCs in 60 s ran 5-20 ms late and the title's threads waited on them (the
++     * stutter on an iPhone 18 Pro Max). On the console a DPC runs as soon as the IRQL drops; the gate still
++     * holds it back while a guest thread is at DISPATCH_LEVEL (its lower wakes the thread again). */
++    if (!t_timer_thread) {
++        extern HANDLE xbox_irq_line_event(void);
++        SetEvent(xbox_irq_line_event());
++    }
++#endif
+     return 1;
+ }
+ 
+@@ -3385,6 +3396,7 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+         return 0;
+     }
+     g_esp = XBOX_WORKER_STACK_TOP(slot);
++    t_timer_thread = 1;
+     {
+         /* Its own TIB, for the same reason bridge_thread_main gives one to
+          * every worker: a DPC routine with an SEH prologue reads fs:[0],
 diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
-index f2dabc9..751059c 100644
+index f2dabc9..7a2a26d 100644
 --- a/src/kernel/kernel_xbox.c
 +++ b/src/kernel/kernel_xbox.c
 @@ -221,7 +221,16 @@ void (*volatile g_xbox_nv2a_idle_hook)(void) = NULL;
@@ -219,7 +256,7 @@ index f2dabc9..751059c 100644
  #define XBOX_ASPECT_21_MAX 2.42
  static double s_video_aspect = 0.0;
  static int s_video_aspect_21;                     /* 21:9 chosen: the ratio may follow the display */
-@@ -261,6 +270,10 @@ void xbox_video_aspect_fit(double display_ratio)
+@@ -261,9 +270,27 @@ void xbox_video_aspect_fit(double display_ratio)
      if (!s_video_aspect_21 || fitted)
          return;                                   /* the first call wins: RECOMP_DISPLAY_RATIO, then the display */
      fitted = 1;
@@ -230,6 +267,23 @@ index f2dabc9..751059c 100644
      if (display_ratio >= XBOX_ASPECT_21_MIN && display_ratio <= XBOX_ASPECT_21_MAX) {
          s_video_aspect = display_ratio;
          fprintf(stderr, "  [video] 21:9 = the display's %.4f (64:27 = 2.3704)\n", display_ratio);
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++        {
++            /* RECOMP_PRESENT_CROP_Y=<lines of 480> (the port, iOS): rows the title keeps black at the top and the
++             * bottom of its frame are cut off by the present (nv2a_vk.c), so the frame's whole 480 lines stand for
++             * a narrower picture - the rows in between fill the display (Panzer Dragoon Orta's 16 + 16, 2026-11-19) */
++            const char *c = getenv("RECOMP_PRESENT_CROP_Y");
++            double y = c && *c ? strtod(c, NULL) : 0.0;
++            if (y > 0.0 && y < 120.0) {
++                s_video_aspect = display_ratio * (1.0 - 2.0 * y / 480.0);
++                fprintf(stderr, "  [video] %g + %g of 480 lines cut off: the frame stands for %.4f\n", y, y,
++                        s_video_aspect);
++            }
++        }
++#endif
+     } else {
+         fprintf(stderr, "  [video] 21:9 stays 64:27 (display %.4f is no 21:9 panel)\n", display_ratio);
+     }
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
 index 8bb17ea..fa90c7c 100644
 --- a/src/kernel/xbox_memory_layout.c
@@ -309,7 +363,7 @@ index 8bb17ea..fa90c7c 100644
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index ec863b3..247f1cd 100644
+index ec863b3..97041cc 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -74,6 +74,14 @@
@@ -1012,6 +1066,28 @@ index ec863b3..247f1cd 100644
      }
      dci.pNext = &f2;
      dci.queueCreateInfoCount = 1;
+@@ -8719,6 +9164,21 @@ static void vk_flip(void)
+                     cmx = s_crop_mx;
+                     cmy = s_crop_my;
+                 }
++#if defined(XR_VK_IOS)
++                /* RECOMP_PRESENT_CROP_Y (iOS, the port): the title's fixed black rows at the top and the bottom are
++                 * cut off in every display mode, the rows between them fill the screen (kernel_xbox.c gives the
++                 * frame the narrower aspect that makes them exactly the display's) */
++                if (!s_boot_on && !shader && xbox_video_widescreen()) {
++                    static float fixed = -1.0f;
++                    if (fixed < 0.0f) {
++                        const char *e = getenv("RECOMP_PRESENT_CROP_Y");
++                        double y = e && *e ? strtod(e, NULL) : 0.0;
++                        fixed = y > 0.0 && y < 120.0 ? (float)(y / 480.0) : 0.0f;
++                    }
++                    if (fixed > cmy)
++                        cmy = fixed;
++                }
++#endif
+                 /* the window's own aspect (4:3 or 16:9, set at its creation) less the margins - per window,
+                  * not per frame, so a title's 4:3 menus and 16:9 play do not resize it back and forth */
+                 if (s_dm_cur == NV2A_VK_DISPLAY_WINDOWED && !s_boot_on && s_win_aspect > 0.0f)
 diff --git a/src/platform/host_vblank.c b/src/platform/host_vblank.c
 index 66434b5..45c6897 100644
 --- a/src/platform/host_vblank.c

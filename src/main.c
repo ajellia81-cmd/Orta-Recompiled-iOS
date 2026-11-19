@@ -150,6 +150,15 @@ int main(int argc, char **argv)
             host_setenv_default("RECOMP_DISPLAY_RATIO", v);
         }
     }
+    /* SCREEN: Orta keeps 16 lines black at the top and the bottom of its widescreen frame in play (16 + 16 of 480,
+     * measured on the iPhone 18 Pro Max, 2026-11-19) - the bars the player saw. The present cuts them off and the
+     * 448 lines in between fill the screen; the frame's aspect is set narrower by the same amount (toolkit
+     * kernel_xbox.c), so the picture is not stretched and the camera sees as far to the sides as before.
+     * Cutscenes keep the rest of their own (wider) bars. */
+    if (!strcmp(settings_get("aspect_ratio", "4:3"), "21:9")) {
+        host_setenv_default("RECOMP_PRESENT_CROP_Y", "16");
+        orta_ios_set_crop_y(atoi(getenv("RECOMP_PRESENT_CROP_Y") ? getenv("RECOMP_PRESENT_CROP_Y") : "16"));
+    }
     /* and the 3D at the screen's own resolution, 1:1 to its pixels (RENDER RESOLUTION lists the screen's height in
      * place of the nearest step, recomp_manual.c) */
     if (!settings_get("render_scale_wide", NULL) && orta_ios_native_lines() > 480) {

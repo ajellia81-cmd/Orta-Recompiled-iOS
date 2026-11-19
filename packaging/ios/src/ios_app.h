@@ -28,6 +28,9 @@ int orta_ios_game_dir_has_image(const char *game_dir);
 /* The screen's short side in pixels (0 before orta_ios_start): the render resolution 1:1 to the screen
  * (recomp_manual.c, main.c). */
 int orta_ios_native_lines(void);
+/* rows of 480 the present cuts off at the top and the bottom (RECOMP_PRESENT_CROP_Y): native_lines then counts the
+ * whole frame's lines that put the rows in between 1:1 on the screen */
+void orta_ios_set_crop_y(int lines);
 
 /* The renderer's shader / pipeline lists shipped in the app (OrtaRecomp.app/seed: progcache.bin, vkspirv.bin,
  * vkpipes.bin) copied into data_dir where it has none yet, so the boot prewarm builds every pipeline before the
