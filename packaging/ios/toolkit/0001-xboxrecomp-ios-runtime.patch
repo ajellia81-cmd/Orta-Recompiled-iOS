@@ -114,7 +114,7 @@ index f2dabc9..751059c 100644
          s_video_aspect = display_ratio;
          fprintf(stderr, "  [video] 21:9 = the display's %.4f (64:27 = 2.3704)\n", display_ratio);
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index 8bb17ea..38aa25a 100644
+index 8bb17ea..a8ae389 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -36,7 +36,7 @@
@@ -126,6 +126,45 @@ index 8bb17ea..38aa25a 100644
  #define XR_AC97_EMULATE 1
  #include "platform/mmio_decode.h"
  #include <unistd.h>   /* sysconf */
+@@ -359,7 +359,13 @@ static const struct { uint32_t offset; uint32_t idle_mask; } NV2A_IDLE[] = {
+  * Only RR. Bit 0 is RPBM, run/pause bus master, which software owns.
+  */
+ #define AC97_NABM_OFFSET  0x400000u   /* 0xFEC00000 within the MCPX aperture */
+-#define AC97_TRAP_BYTES   0x1000u
++/* The trapped span: the NABM's 4 KB page - or, on a host with bigger pages, the host page that holds it (iOS / Apple
++ * silicon: 16 KB, 0xFEC00000..0xFEC03FFF; 2026-11-19). Past the AC97's own 4 KB nothing lives in the MCPX aperture
++ * there, so a write that lands in the rest is only emulated as plain memory, and the channel model sees offsets
++ * outside +0x100..+0x17F it ignores. Without this the iPhone's 16 KB pages left the trap off and Orta spun in
++ * DirectSoundCreate's channel reset (a black screen, as on the S23 before the arm64 decoder). */
++static uint32_t s_ac97_trap_bytes = 0x1000u;
++#define AC97_TRAP_BYTES   s_ac97_trap_bytes
+ #define AC97_RR           0x02u
+ 
+ static void *g_ac97_page = NULL;      /* host address of the trapped page */
+@@ -560,10 +566,19 @@ static void ac97_arm_write_trap(void)
+         return;
+ #if XR_AC97_EMULATE
+     /* the emulation writes through the host view, and the protection must cover only the NABM page */
+-    if (!g_mcpx_mapping || sysconf(_SC_PAGESIZE) != (long)AC97_TRAP_BYTES) {
+-        fprintf(stderr, "  AC97: no bus-master write trap on this host (%s); a channel reset will spin\n",
+-                g_mcpx_mapping ? "host page is not 4 KB" : "no file mapping behind the MCPX aperture");
+-        return;
++    {
++        long ps = sysconf(_SC_PAGESIZE);
++        /* a power of two the NABM offset is aligned to, at most the 64 KB view granularity */
++        int page_ok = ps >= 0x1000 && ps <= 0x10000 && (ps & (ps - 1)) == 0 && (AC97_NABM_OFFSET % (uint32_t)ps) == 0;
++        if (!g_mcpx_mapping || !page_ok) {
++            fprintf(stderr, "  AC97: no bus-master write trap on this host (%s); a channel reset will spin\n",
++                    g_mcpx_mapping ? "host page size unusable" : "no file mapping behind the MCPX aperture");
++            return;
++        }
++        s_ac97_trap_bytes = (uint32_t)ps;
++        if (ps != 0x1000)
++            fprintf(stderr, "  AC97: host page is %ld KB - the trap covers 0xFEC00000..0x%08X\n", ps / 1024,
++                    0xFEC00000u + (uint32_t)ps - 1u);
+     }
+ #elif !XR_HOST_SINGLE_STEP
+     (void)old;
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
 index ec863b3..372e97a 100644
 --- a/src/nv2a_vk/nv2a_vk.c
