@@ -56,6 +56,9 @@ jobs:
           ls -l default.xbe
           # optional: the renderer's cache lists from a played game (progcache.bin, vkspirv.bin, vkpipes.bin) - the app
           # seeds them into data/ on its first start, so no scene compiles shaders the first time it is played
+          # optional: the app icon (the game's cover art) from the private repo - it never enters this public one
+          gh api "repos/$PRIVATE_REPO/contents/assets/icon.png" -H "Accept: application/vnd.github.raw" > icon.png 2>/dev/null \
+            && file icon.png | grep -q PNG && echo "icon: from the private repo" || rm -f icon.png
           mkdir -p seed
           for f in progcache.bin vkspirv.bin vkpipes.bin vkpipes_vi.bin; do
             gh release download xbe -R "$PRIVATE_REPO" --pattern "$f" --dir seed 2>/dev/null && echo "seed: $f" || true
@@ -71,6 +74,7 @@ jobs:
         env:
           ORTA_IOS_CHECK: ${{ inputs.mode == 'check' && '1' || '' }}
           ORTA_SEED_DIR: seed
+          ORTA_ICON: icon.png
         run: bash tools/build_ios.sh default.xbe
 
       - name: OrtaRecomp.ipa (private repository, release "latest")
@@ -86,4 +90,4 @@ jobs:
         # never published here
       - name: Clean up
         if: always()
-        run: rm -rf default.xbe seed out/ios build/ios/gen build/ios/pipe
+        run: rm -rf default.xbe seed icon.png out/ios build/ios/gen build/ios/pipe

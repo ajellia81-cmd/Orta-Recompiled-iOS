@@ -1035,6 +1035,15 @@ static int opt_clone_label(uint32_t tmpl_id, uint32_t new_id, const char *text, 
  * Texts: a view's text for a line replaces the glyph pointer + count of that line's label text nodes (normal,
  * selected, plain row records) with a port-owned glyph buffer; the stock values are restored for lines without a
  * view text. All state is rebuilt on every open (orta_opt_after_load), the records are reloaded then. */
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+/* iOS (2026-11-18): "21:9" is the phone's whole screen (toolkit kernel_xbox.c: any ratio from 1.70 is the display's),
+ * shown as SCREEN; the HUD at the edges as on Android (drawn under the cut-out too, no inset) */
+#define ORTA_IOS_SCREEN 1
+extern int orta_ios_native_lines(void);
+#endif
+#endif
 /* Views from OPT_V_RECOMP on are the port's own: their lines come from k_pl (value lines, sub-lists, picks). */
 enum { OPT_V_TOP, OPT_V_CONTROLS, OPT_V_SOUND, OPT_V_RECOMP, OPT_V_AA, OPT_V_FPS, OPT_V_BOOT, OPT_V_BIND,
        OPT_V_RESTART, OPT_V_PIC, OPT_V_VIEW, OPT_V_N };
@@ -1044,10 +1053,16 @@ static const signed char k_opt_rows[OPT_V_N][9] = {
      * ANZEIGE, SOUND, CONTROLS, RECOMP (maintainer 2026-11-04 ~08:00) */
     {          0, -1,  3, -1, -1, -1,  1,  2,  4 },
     {          0,  1,  2, -1, -1, -1, -1, -1, -1 },   /* CONTROLS */
+#if defined(ORTA_IOS_SCREEN)
+    /* iOS (2026-11-19): no SPEAKERS - the phone's speakers and headphones are stereo (5.1 only through an HDMI /
+     * AirPlay receiver); stereo is fixed (main.c) */
+    {         -1, -1, -1,  0,  1,  2, -1, -1, -1 },   /* SOUND: BGM / SE / STIMMEN */
+#else
     {         -1, -1, -1,  0,  1,  2,  3, -1, -1 },   /* SOUND: BGM / SE / STIMMEN, SPEAKERS (line 6, port value) */
-#ifdef __ANDROID__
-    /* Android: no DISPLAY MODE (the app is always full screen, the line has no function there) - line 1 hidden,
-     * the others move up a row */
+#endif
+#if defined(__ANDROID__) || defined(ORTA_IOS_SCREEN)
+    /* Android (and iOS, the same rule): no DISPLAY MODE (the app is always full screen, the line has no function
+     * there) - line 1 hidden, the others move up a row */
     {          0, -1,  1,  2, -1, -1,  3,  4,  5 },   /* RECOMP OPTIONS without DISPLAY MODE */
 #else
     /* RECOMP OPTIONS, value sprites parked; lines 4 / 5 (were ANISOTROPIC FILTER, ANTIALIASING >) hidden since
@@ -1055,10 +1070,20 @@ static const signed char k_opt_rows[OPT_V_N][9] = {
     {          0,  1,  2,  3, -1, -1,  4,  5,  6 },
 #endif
     {         -1, -1, -1, -1, -1, -1, -1, -1, -1 },   /* (unused since 2026-11-12: ANTIALIASING is in POST PROCESSING) */
+#if defined(ORTA_IOS_SCREEN)
+    /* iOS (2026-11-19): FPS COUNTER only - FRAME RATE has one value (120 not offered), FRAME PACING TIMER brought the
+     * judder back (the display paces, main.c fixes it), VSYNC OFF does nothing (Metal presents on the refresh) */
+    {         -1, -1, -1,  0, -1, -1, -1, -1, -1 },   /* RECOMP > FRAME RATE: FPS COUNTER */
+#else
     {          0,  1,  2,  3, -1, -1, -1, -1, -1 },   /* RECOMP > FRAME RATE: FRAME RATE, FRAME PACING, VSYNC, FPS COUNTER */
+#endif
     {          0,  1, -1, -1, -1, -1, -1, -1, -1 },   /* RECOMP > BOOT ANIMATION: status, ON / OFF */
     {          0,  1,  2,  3,  4,  5,  6,  7,  8 },   /* CONTROLS > BUTTON MAPPING: DEVICE, RESET, 6 bindings, NEXT */
+#if defined(ORTA_IOS_SCREEN)
+    {          0,  1, -1, -1, -1, -1, -1, -1, -1 },   /* iOS: CLOSE AND REOPEN THE APP, OK */
+#else
     {          0,  1,  2, -1, -1, -1, -1, -1, -1 },   /* RESTART NEEDED: the line, RESTART NOW, LATER */
+#endif
     {          0,  1,  2,  3,  4,  5, -1, -1, -1 },   /* RECOMP > POST PROCESSING: the game's two values, AA, AF, BLOOM x2 */
     {          0,  1, -1, -1, -1, -1, -1, -1, -1 },   /* RECOMP > ASPECT RATIO AND FOV: ASPECT RATIO, FIELD OF VIEW */
 };
@@ -1089,15 +1114,6 @@ static void opt_node_stock(uint32_t node, uint32_t *count, uint32_t *glyphs)
  * reads them before the device / XAPI settings exist). The sub-lists (">") and BRIGHTNESS are not built yet. */
 #include "settings.h"
 #include "nv2a_backend.h"   /* toolkit: xbox_video_aspect (21:9 = the display's exact ratio) */
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#if TARGET_OS_IPHONE
-/* iOS (2026-11-18): "21:9" is the phone's whole screen (toolkit kernel_xbox.c: any ratio from 1.70 is the display's),
- * shown as SCREEN; the HUD at the edges as on Android (drawn under the cut-out too, no inset) */
-#define ORTA_IOS_SCREEN 1
-extern int orta_ios_native_lines(void);
-#endif
-#endif
 #if defined(ORTA_IOS_SCREEN)
 #define ORTA_ASPECT_21_MIN 1.70
 #define ORTA_ASPECT_21_LABEL "SCREEN"
@@ -1148,8 +1164,14 @@ static const opt_val_t k_rv[RV_N] = {
     [RV_RENDER]   = { "RENDER RESOLUTION", NULL, NULL, { 0 }, { 0 }, 0 },          /* opt_render_* */
     /* 16:10 / 21:9 (night order 2026-11-07; THPS 2X v1.2.0): Orta's own 16:9 path, widened further by the port
      * (orta_aspect_* below); 21:9 = the display's exact ratio in the 21:9 range, else 64:27 (orta_aspect_21x9) */
+#if defined(ORTA_IOS_SCREEN)
+    /* iOS (2026-11-19): no 16:10 - no iPhone has that shape; 4:3, 16:9 or the whole screen */
+    [RV_ASPECT]   = { "ASPECT RATIO", "aspect_ratio", "4:3", { "4:3", "16:9", "21:9" },
+                      { "4:3", "16:9", ORTA_ASPECT_21_LABEL }, 3 },
+#else
     [RV_ASPECT]   = { "ASPECT RATIO", "aspect_ratio", "4:3", { "4:3", "16:9", "16:10", "21:9" },
                       { "4:3", "16:9", "16:10", ORTA_ASPECT_21_LABEL }, 4 },
+#endif
     /* FIELD OF VIEW (night order 2026-11-07; THPS 2X v1.2.0: ORIGINAL, +5 .. +30 degrees): added to the camera angle
      * the game hands its renderer (sub_000419A0), at once. The menu font has no '+': the value is the degrees. */
     [RV_FOV]      = { "FIELD OF VIEW", "field_of_view", "0", { "0", "5", "10", "15", "20", "25", "30" },
@@ -1187,8 +1209,13 @@ static const opt_pl_t k_pl[OPT_V_N][9] = {
     [OPT_V_FPS]    = { { PL_VAL, RV_FRAMERATE }, { PL_VAL, RV_PACING }, { PL_VAL, RV_VSYNC }, { PL_VAL, RV_FPSHUD } },
     [OPT_V_BOOT]   = { { PL_TEXT, 1 }, { PL_VAL, RV_BOOT } },   /* a = 1: the file's status line */
     /* leaving RECOMP OPTIONS with a restart-bound value changed (CLAUDE.md RESTART NEEDED; THPS 2X host_restart) */
+#if defined(ORTA_IOS_SCREEN)
+    /* iOS: an app cannot start itself - the player closes it (app switcher) and opens it again; OK = LATER */
+    [OPT_V_RESTART] = { { PL_TEXT, 0, 0, "CLOSE AND REOPEN THE APP" }, { PL_TEXT, 4, 0, "OK" } },
+#else
     [OPT_V_RESTART] = { { PL_TEXT, 0, 0, "RESTART NEEDED" }, { PL_TEXT, 3, 0, "RESTART NOW" },
                         { PL_TEXT, 4, 0, "LATER" } },
+#endif
     [OPT_V_PIC]    = { { PL_GAMEF, 0, 0, "BRIGHTNESS" }, { PL_GAMEF, 1, 0, "CONTRAST" }, { PL_VAL, RV_AA },
                        { PL_VAL, RV_ANISO }, { PL_VAL, RV_BLOOM }, { PL_VAL, RV_BLOOMSTR } },
     [OPT_V_VIEW]   = { { PL_VAL, RV_ASPECT }, { PL_VAL, RV_FOV } },
@@ -2553,8 +2580,13 @@ static const char *opt_help_for(int view, uint32_t line)
              : line == 5 ? "How strong the glow is, 1 to 10.\nLeft or right to change, Y for the default.\nApplies at once."
                          : NULL;
     if (view == OPT_V_RESTART)
+#if defined(ORTA_IOS_SCREEN)
+        return line == 1 ? "The new settings apply at the next start:\nclose the app in the app switcher\nand open it again."
+                         : "Some settings apply after a restart.";
+#else
         return line == 1 ? "Restarts the game with the new settings.\nUnsaved progress is lost."
              : line == 2 ? "The new settings apply at the next start." : "Some settings apply after a restart.";
+#endif
     if (view == OPT_V_BIND) {
         uint32_t what = s_bind_line_ctl[line];
         if (what == BIND_DEVICE) return "Keyboard or controller.\nLeft or right to change.";

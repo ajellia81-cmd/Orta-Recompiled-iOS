@@ -7,3 +7,5 @@ build/
 gen/
 *.log
 docs/xbe-raw.txt
+/icon.png
+/seed/

@@ -174,13 +174,17 @@ int main(int argc, char **argv)
     host_log_version_and_host(opt.game_dir);       /* "version: ..." / "host: ..." for bug reports */
     /* RECOMP OPTIONS > FRAME RATE > VSYNC (vsync=on|off): the toolkit reads RECOMP_VSYNC once at start, so the
      * saved value becomes its default here (an explicit RECOMP_VSYNC still wins); a change needs a restart. */
+#ifndef ORTA_IOS          /* iOS: VSYNC, FRAME PACING and SPEAKERS are not in the menus - on, display, stereo */
     if (!strcmp(settings_get("vsync", "on"), "off"))
         host_setenv_default("RECOMP_VSYNC", "0");
+#endif
     /* RECOMP OPTIONS > FRAME RATE > FRAME PACING (frame_pacing=display|timer; port guideline 2026-11-05, THPS 2X
      * v1.1.0): DISPLAY (default) = the guest vblank follows a 120 / 180 / 240 Hz display's own vblank (toolkit
      * host_vblank); 60 HZ TIMER = the old clock. Read once by the kernel at start. */
+#ifndef ORTA_IOS
     if (!strcmp(settings_get("frame_pacing", "display"), "timer"))
         host_setenv_default("RECOMP_FRAME_PACING", "timer");
+#endif
     /* FRAME RATE 120 (night order 2026-11-07): the guest vblank at 120 Hz (toolkit RECOMP_GUEST_HZ); the game's
      * frame time step goes to 1/120 in orta_options_apply. ORTA_FPS=120 / 60 forces it for one run. */
     {
@@ -195,8 +199,10 @@ int main(int argc, char **argv)
      * device with 5.1 speakers, and then XC_AUDIO tells Orta it runs on a Dolby Digital Xbox - Orta mixes its
      * sounds across the six speakers itself (FC dialogue, surrounds at front level; run 20261108_005443_spk_10000).
      * Read at start: a change asks RESTART NEEDED. */
+#ifndef ORTA_IOS
     if (!strcmp(settings_get("speakers", "stereo"), "5.1"))
         host_setenv_default("RECOMP_AUDIO_51", "1");
+#endif
     /* The renderer's per-frame ring at 16 MB instead of 48 (two in flight, both resident): Orta's peak is 8 MB per
      * frame (RECOMP_VK_RING_STATS through boot, movies, menus and 6 min of episode 1: 0 mid-frame flushes) - 64 MB
      * less working set (maintainer 2026-11-08: RAM in menus / movies; working set of the title 356 -> 291 MB). */

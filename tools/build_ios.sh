@@ -160,8 +160,13 @@ if [ -n "${ORTA_SEED_DIR:-}" ] && ls "$ORTA_SEED_DIR"/*.bin >/dev/null 2>&1; the
     cp "$ORTA_SEED_DIR"/*.bin "$STAGE/OrtaRecomp.app/seed/"
     echo "  cache seed: $(cd "$ORTA_SEED_DIR" && ls *.bin | tr '\n' ' ')"
 fi
-sips -z 120 120 assets/icon_256.png --out "$STAGE/OrtaRecomp.app/AppIcon60x60@2x.png" >/dev/null
-sips -z 180 180 assets/icon_256.png --out "$STAGE/OrtaRecomp.app/AppIcon60x60@3x.png" >/dev/null
+# the app icon: ORTA_ICON (the private repo's assets/icon.png - the game's cover, never in this public repo), else
+# the port's own icon
+ICON_SRC=assets/icon_256.png
+if [ -n "${ORTA_ICON:-}" ] && [ -f "$ORTA_ICON" ]; then ICON_SRC="$ORTA_ICON"; fi
+echo "  icon: $ICON_SRC"
+sips -s format png -z 120 120 "$ICON_SRC" --out "$STAGE/OrtaRecomp.app/AppIcon60x60@2x.png" >/dev/null
+sips -s format png -z 180 180 "$ICON_SRC" --out "$STAGE/OrtaRecomp.app/AppIcon60x60@3x.png" >/dev/null
 mkdir -p "$STAGE/OrtaRecomp.app/licenses"
 cp LICENSE "$STAGE/OrtaRecomp.app/licenses/Orta-Recompiled_GPL-3.0.txt"
 cp "$TK/LICENSE" "$STAGE/OrtaRecomp.app/licenses/xboxrecomp_MIT.txt"
