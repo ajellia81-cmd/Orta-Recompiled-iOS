@@ -1967,6 +1967,14 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
     uint32_t now = (uint32_t)SDL_GetTicks(), b, hh;
     float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy, dy = -1.0f;
     int j, i, k, count = 0, prev, slot = -1, hide = 0;
+    {
+        /* off since b0c26ea (2026-11-20): the flight's cause is gone (the walks leave the right-edge grooves alone),
+         * and this hiding made some glints vanish at once. ORTA_FLY_HIDE=1 turns it on again. */
+        static int on = -1;
+        if (on < 0) { const char *e = getenv("ORTA_FLY_HIDE"); on = e && *e == '1'; }
+        if (!on)
+            return;
+    }
     if (now - s_opt_seen_ms > 200u)
         return;
     for (j = 0; j < 4; j++) {
@@ -2143,6 +2151,18 @@ static void hud_clip_16x9(int n, uint32_t lo, uint32_t hi, float f)
         }
         if (!ok || (xl >= L && xr <= R))
             continue;
+        {
+            /* small pieces (the grooves' glints, up to 16 x 16) are left whole: cut at the edge they vanished at
+             * once instead of fading along their groove (iPhone 2026-11-20) */
+            float yl = 1e30f, yh = -1e30f, yy;
+            for (j = 0; j < 4; j++) {
+                yy = orta_qx(va + (uint32_t)j * 0x20u + 4u);
+                if (yy < yl) yl = yy;
+                if (yy > yh) yh = yy;
+            }
+            if (xr - xl <= 16.0f && yh - yl <= 16.0f)
+                continue;
+        }
         if (xr <= L || xl >= R) {                    /* wholly outside: off the screen */
             float off = -4096.0f;
             memcpy(&b, &off, 4);
