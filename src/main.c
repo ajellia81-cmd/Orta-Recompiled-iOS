@@ -150,6 +150,9 @@ int main(int argc, char **argv)
             host_setenv_default("RECOMP_DISPLAY_RATIO", v);
         }
     }
+    /* the frame times in orta.log every 5 s ("[fps] ... flip interval p50 / p99, short / long"): the stutter
+     * reports need them (2026-11-19); RECOMP_FPS_LOG=0 turns it off */
+    host_setenv_default("RECOMP_FPS_LOG", "1");
     /* SCREEN: Orta keeps 16 lines black at the top and the bottom of its widescreen frame in play (16 + 16 of 480,
      * measured on the iPhone 18 Pro Max, 2026-11-19) - the bars the player saw. The present cuts them off and the
      * 448 lines in between fill the screen; the frame's aspect is set narrower by the same amount (toolkit

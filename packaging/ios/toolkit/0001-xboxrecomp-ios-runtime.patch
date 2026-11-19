@@ -285,7 +285,7 @@ index f2dabc9..7a2a26d 100644
          fprintf(stderr, "  [video] 21:9 stays 64:27 (display %.4f is no 21:9 panel)\n", display_ratio);
      }
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index 8bb17ea..fa90c7c 100644
+index 8bb17ea..961c541 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -12,6 +12,12 @@
@@ -349,7 +349,23 @@ index 8bb17ea..fa90c7c 100644
      }
  #elif !XR_HOST_SINGLE_STEP
      (void)old;
-@@ -1267,6 +1288,12 @@ static DWORD WINAPI dp_thread(LPVOID unused)
+@@ -1188,6 +1209,15 @@ static int dp_measure(int64_t *period_ns, uint64_t *last_ns)
+         mult = (hz + 30) / 60;
+         fprintf(stderr, "  frame pacing: display measured %.3f Hz (try %d: %d of %d intervals within 0.5 ms of the median)\n",
+                 med > 0 ? 1e9 / (double)med : 0.0, attempt, ok, N);
++#if defined(XR_DP_RETRY)
++        /* iOS: the port holds the display at 60 Hz (a 120 Hz one shows a 60 Hz title's frames 1 and 3 refreshes
++         * long), so 60 Hz paces too - the guest's vblank IS the display's, every frame gets the whole 16.7 ms
++         * before the refresh it is shown at (the 60 Hz timer drifts against it: frames meet a refresh late or
++         * early by turns, 2026-11-19) */
++        if (mult == 1 && hz >= 58)
++            mult = 1;
++        else
++#endif
+         if (hz < 110 || mult < 2 || mult > 4) {
+             fprintf(stderr, "  frame pacing: display below 120 Hz or above 240 Hz -> 60 Hz timer\n");
+             return 0;
+@@ -1267,6 +1297,12 @@ static DWORD WINAPI dp_thread(LPVOID unused)
                  dp_set_source(0, 0, 0);
          }
          host_vblank_close();
