@@ -1935,7 +1935,8 @@ static void hud_snap_quad(uint32_t vp)
  * video 2026-11-19, OPTIONS). Two keyed tries failed: by sprite record (the groove glints share one record: all
  * but one hid) and by record + 8 px column (the dot came back: build e65bf1f). Now no identity is needed: while the
  * options screen runs, a small sprite (<= 16 x 16) is drawn only if a sprite of the same record was near it in the
- * frame before (within 20 px both ways, or on the same row: text sliding sideways) - or if the record drew nothing
+ * frame before (within 6 px both ways, or on the same row within 48 px: text sliding sideways; 20 px let the dot
+ * through - it flies up the groove column past the glints of its record, build 762eb56) - or if the record drew nothing
  * then (a new one). The glints creep a pixel a frame and always have their own last position next to them; the
  * flying dot is 45+ rows from everything of its record. A legitimate jump (a small cursor) loses one frame. */
 static uint32_t s_opt_seen_ms;                 /* sub_000AF580 (the options screen's handler) last ran */
@@ -1948,6 +1949,8 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
     uint32_t now = (uint32_t)SDL_GetTicks(), b;
     float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy;
     int j, i, any = 0, near = 0, prev;
+    float best = 1e30f;
+    static int s_fly_logged;
     if (now - s_opt_seen_ms > 200u)
         return;
     for (j = 0; j < 4; j++) {
@@ -1977,7 +1980,8 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
         any = 1;
         dx = fabsf(s_fly[prev][i].x - cx);
         dy = fabsf(s_fly[prev][i].y - cy);
-        if ((dx <= 20.0f && dy <= 20.0f) || dy <= 2.0f) { near = 1; break; }
+        if ((dx <= 6.0f && dy <= 6.0f) || (dy <= 2.0f && dx <= 48.0f)) { near = 1; break; }
+        if (dx + dy < best) best = dx + dy;
     }
     if (s_fly_n[s_fly_cur] < ORTA_FLY_N) {
         i = s_fly_n[s_fly_cur]++;
@@ -1986,6 +1990,11 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
         s_fly[s_fly_cur][i].y = cy;
     }
     if (any && !near) {
+        if (s_fly_logged < 40) {
+            s_fly_logged++;
+            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), nearest of its record last frame %.1f px\n",
+                    arg, cx, cy, x1 - x0, y1 - y0, best);
+        }
         memcpy(&b, &off, 4);
         for (j = 0; j < 4; j++)
             GUEST32(vp + (uint32_t)j * 0x20u) = b;
@@ -1998,7 +2007,18 @@ void sub_00069A90(RECOMP_PARAMS)
     uint32_t arg = GUEST32(g_esp + 4), vp0 = GUEST32(0x46F890u);
     ORTA_WS_SQUEEZE_CALL(sub_00069A90_gen);
     if (GUEST32(0x46F890u) == vp0 + 0x80u) {
+        /* diagnosis (2026-11-19, cursor lines still of different thickness): thin bars through this emitter, their
+         * y before and after the snap; the toolkit's [THIN] lines show every thin bar drawn, whatever its path */
+        static int s_thin_n;
+        float ty0 = orta_qx(vp0 + 4u), ty2 = orta_qx(vp0 + 0x40u + 4u);
+        float tx0 = orta_qx(vp0), tx1 = orta_qx(vp0 + 0x20u);
+        int thin = s_thin_n < 40 && fabsf(ty2 - ty0) <= 4.0f && fabsf(tx1 - tx0) >= 24.0f;
         hud_snap_quad(vp0);
+        if (thin) {
+            s_thin_n++;
+            fprintf(stderr, "[THIN2] record %08X x %.2f..%.2f y %.4f %.4f -> %.6f %.6f\n", arg, tx0, tx1, ty0, ty2,
+                    orta_qx(vp0 + 4u), orta_qx(vp0 + 0x40u + 4u));
+        }
         if (!hud_in_play())
             menu_flight_hide(arg, vp0);
     }

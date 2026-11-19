@@ -39,10 +39,27 @@ index 1e9b6b0..b97e666 100644
      /* This block: frame_buf holds the 256 VP/DSP samples of the last eight frames (zero when se_frame did not run,
       * since it is cleared after every block). Tone and software mixer go on top, in real time.
 diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
-index 4c19c68..74f6517 100644
+index 4c19c68..d40c8ff 100644
 --- a/src/apu/apu_xaudio2.c
 +++ b/src/apu/apu_xaudio2.c
-@@ -276,6 +276,27 @@ static SDL_AudioStream *g_sdl_stream;
+@@ -18,7 +18,16 @@
+ 
+ #define XA2_SAMPLE_RATE   48000
+ #define XA2_BUF_SAMPLES   1024   /* ~21ms per submission */
++#if defined(__APPLE__) && defined(XBOX_APU_SDL3_AUDIO)
++#include <TargetConditionals.h>
++#endif
++#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
++/* iOS (2026-11-19): 6 x 1024 (~128 ms) queued - the APU's mix came 25-30 ms late at every RECOMP option change
++ * (render scale / aspect, iPhone log 85f2e742) and 64 ms was too little cushion under CoreAudio's large pulls */
++#define XA2_NUM_BUFS      6
++#else
+ #define XA2_NUM_BUFS      3
++#endif
+ 
+ int xa2_surround_requested(void)
+ {
+@@ -276,6 +285,27 @@ static SDL_AudioStream *g_sdl_stream;
  static int              g_sdl_channels = 2;
  static int              g_sdl_frames_written;
  
@@ -70,7 +87,7 @@ index 4c19c68..74f6517 100644
  int xa2_surround(void) { return g_sdl_channels == 6; }
  int xa2_channels(void) { return g_sdl_channels; }
  
-@@ -309,6 +330,15 @@ int xa2_init(void)
+@@ -309,6 +339,15 @@ int xa2_init(void)
          return 0;
      }
      SDL_ResumeAudioStreamDevice(g_sdl_stream);
@@ -86,7 +103,7 @@ index 4c19c68..74f6517 100644
      g_xbox_audio_surround = g_sdl_channels == 6;
      g_sdl_frames_written = 0;
      fprintf(stderr, "[AUDIO] SDL3 audio stream on '%s' (%d Hz %s 16-bit, up to %d x %d frames queued)\n",
-@@ -337,10 +367,45 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
+@@ -337,10 +376,52 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
      int bytes_per_frame = g_sdl_channels * (int)sizeof(int16_t);
      int n = num_samples > XA2_BUF_SAMPLES ? XA2_BUF_SAMPLES : num_samples;
  
@@ -111,17 +128,24 @@ index 4c19c68..74f6517 100644
 +        /* iOS (2026-11-19, "sound breaks at every RECOMP option change", our handlers 0.1 ms): when the device
 +         * finds the queue empty it plays silence - counted here, with the time, so the log shows whether the
 +         * break is a starved device (and when) or something in the mix itself */
-+        static int s_had, s_dry, s_dry_logged;
++        static int s_had, s_dry, s_dry_lines;
++        static Uint64 s_dry_t0;
 +        int q = SDL_GetAudioStreamQueued(g_sdl_stream);
++        Uint64 now = SDL_GetTicks();
 +        if (q >= XA2_NUM_BUFS * XA2_BUF_SAMPLES * bytes_per_frame)
 +            return 0;
 +        if (q <= 0 && s_had) {
++            if (!s_dry)
++                s_dry_t0 = now;
 +            s_dry++;
-+            if (s_dry_logged < 40) {
-+                s_dry_logged++;
-+                fprintf(stderr, "[AUDIO] device ran dry at %llu ms (%d times so far)\n",
-+                        (unsigned long long)SDL_GetTicks(), s_dry);
++        }
++        if (s_dry && now - s_dry_t0 >= 1000) {          /* one line per second at most, never used up */
++            if (s_dry_lines < 200) {
++                s_dry_lines++;
++                fprintf(stderr, "[AUDIO] device ran dry %d times in the second from %llu ms\n", s_dry,
++                        (unsigned long long)s_dry_t0);
 +            }
++            s_dry = 0;
 +        }
 +        s_had = 1;
 +    }
@@ -430,7 +454,7 @@ index 8bb17ea..961c541 100644
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index ec863b3..4f4d0b3 100644
+index ec863b3..40e97f7 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -74,6 +74,14 @@
@@ -1156,7 +1180,57 @@ index ec863b3..4f4d0b3 100644
  
  static int prim_indices(const Nv2aRawBatch *b, const uint32_t **idx, uint32_t *n,
                          VkPrimitiveTopology *topo, uint32_t *cls)
-@@ -6012,6 +6466,11 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
+@@ -5973,6 +6427,49 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
+         }
+         dn++;
+     }
++#if defined(XR_VK_IOS)
++    {
++        /* RECOMP_VK_THIN_LOG (iOS, on by default from the port, 2026-11-19): every 4-vertex group of a draw that is
++         * a thin horizontal bar (at most 4 title rows tall, 24+ wide) - the options' cursor lines were of different
++         * thickness on the iPhone and two fixes in the port's 2D emitter changed nothing, so which draw path they
++         * take and their exact corners. Once per program / row / height, at most 80 lines. */
++        static int tl = -1;
++        static uint32_t tseen[80], tn;
++        if (tl < 0) {
++            const char *e = getenv("RECOMP_VK_THIN_LOG");
++            tl = e && *e && *e != '0';
++        }
++        if (tl && tn < 80 && b->vertex_count >= 4 && b->vertex_count <= 4096) {
++            uint32_t g, h = vp_hash(b), i;
++            for (g = 0; g + 4 <= b->vertex_count && tn < 80; g += 4) {
++                float f[4], x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, ys[4], zw[2] = { 0, 0 };
++                for (i = 0; i < 4; i++) {
++                    if (b->attr_direct & 1u) attr_to_float4(b, 0, g + i, f);
++                    else if (b->attr_present & 1u) memcpy(f, b->attrs + ((size_t)(g + i) * NV2A_RAW_ATTRS) * 4, sizeof f);
++                    else { x1 = -2e30f; break; }
++                    if (f[0] < x0) x0 = f[0];
++                    if (f[0] > x1) x1 = f[0];
++                    if (f[1] < y0) y0 = f[1];
++                    if (f[1] > y1) y1 = f[1];
++                    ys[i] = f[1];
++                    zw[0] = f[2]; zw[1] = f[3];
++                }
++                if (x1 < -1e30f || !(y1 - y0 <= 4.0f * (b->aa_sy > 1 ? b->aa_sy : 1) && x1 - x0 >= 24.0f))
++                    continue;
++                {
++                    uint32_t key = (h * 2654435761u) ^ ((uint32_t)(int)(y0 * 4.0f) << 8) ^ (uint32_t)(int)((y1 - y0) * 64.0f);
++                    for (i = 0; i < tn && tseen[i] != key; i++) {}
++                    if (i < tn) continue;
++                    tseen[tn++] = key;
++                }
++                fprintf(stderr, "[THIN] f %u prog %08X xform %u prim %u n %u q %u: x %.4f..%.4f y %.6f %.6f %.6f %.6f "
++                        "(h %.4f) z %.3g w %.3g surf %ux%u aa %ux%u scale %g x %g\n", s_frame, h, b->xform, b->prim,
++                        b->vertex_count, g / 4, x0, x1, ys[0], ys[1], ys[2], ys[3], y1 - y0, zw[0], zw[1],
++                        b->surface.width, b->surface.height, (unsigned)b->aa_sx, (unsigned)b->aa_sy, s_scale_x, s_scale);
++            }
++        }
++    }
++#endif
+     {
+         int changed = regs_changed(r);
+         int sq = s_sq_k > 0.0f ? squash_decide(b) : 0;
+@@ -6012,6 +6509,11 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
      }
      if (!prim_indices(b, &idx, &n, &topo, &cls) || !n)
          return;
@@ -1168,7 +1242,7 @@ index ec863b3..4f4d0b3 100644
      VT("draw: prim %u idx %u verts %u attrs %04X direct %04X xform %u surf %08X zeta %08X\n", b->prim, n,
         b->vertex_count, b->attr_present, b->attr_direct, b->xform, b->surface.color_va, b->zeta_va);
      s = target(&b->surface, b->zeta_va, &d);
-@@ -8414,6 +8873,10 @@ static void vk_flip(void)
+@@ -8414,6 +8916,10 @@ static void vk_flip(void)
                  extern void xbox_vblank_report(double, char *, size_t);
                  char vb[128], ft[256];
                  fresh = 0;
@@ -1179,7 +1253,7 @@ index ec863b3..4f4d0b3 100644
                  memset(hist, 0, sizeof hist);
                  n_int = 0;
                  prev = 0;
-@@ -8719,6 +9182,21 @@ static void vk_flip(void)
+@@ -8719,6 +9225,21 @@ static void vk_flip(void)
                      cmx = s_crop_mx;
                      cmy = s_crop_my;
                  }
