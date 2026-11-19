@@ -1973,15 +1973,41 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
     cx = 0.5f * (x0 + x1);
     cy = 0.5f * (y0 + y1);
     prev = s_fly_cur ^ 1;
-    for (i = 0; i < s_fly_n[prev]; i++) {
-        float dx, dy;
-        if (s_fly[prev][i].arg != arg)
-            continue;
-        any = 1;
-        dx = fabsf(s_fly[prev][i].x - cx);
-        dy = fabsf(s_fly[prev][i].y - cy);
-        if ((dx <= 6.0f && dy <= 6.0f) || (dy <= 2.0f && dx <= 48.0f)) { near = 1; break; }
-        if (dx + dy < best) best = dx + dy;
+    /* The rule of aedbebc (the build where the dot did not fly): a record that moved more than 45 rows since the
+     * frame before is hidden - but only a record drawn ONCE a frame. The groove glints share one record drawn many
+     * times a frame (aedbebc hid all of them but one); the flying dot is a record of its own. A record seen once
+     * last frame: its move from there; not seen last frame: its last place within 100 ms (seen[]). */
+    {
+        static struct { uint32_t arg; float y; uint32_t t; } seen[128];
+        int count = 0, k;
+        float py = 0.0f;
+        uint32_t hh = (arg >> 3) * 2654435761u >> 25;
+        for (i = 0; i < s_fly_n[prev]; i++)
+            if (s_fly[prev][i].arg == arg) { count++; py = s_fly[prev][i].y; }
+        for (i = 0; i < s_fly_n[s_fly_cur]; i++)
+            if (s_fly[s_fly_cur][i].arg == arg) count += 2;      /* already drawn this frame: a multi record */
+        if (count == 1) {
+            any = 1; best = fabsf(cy - py);
+            near = !(best > 45.0f);
+        } else if (count == 0) {
+            for (k = 0; k < 4; k++) {
+                i = (int)((hh + (uint32_t)k) & 127u);
+                if (seen[i].arg == arg && now - seen[i].t <= 100u) {
+                    any = 1; best = fabsf(cy - seen[i].y);
+                    near = !(best > 45.0f);
+                    break;
+                }
+            }
+        } else {
+            any = 0;                                              /* drawn more than once a frame: never hidden */
+        }
+        for (k = 0; k < 4; k++) {
+            i = (int)((hh + (uint32_t)k) & 127u);
+            if (seen[i].arg == arg || seen[i].arg == 0 || now - seen[i].t > 1000u) {
+                seen[i].arg = arg; seen[i].y = cy; seen[i].t = now;
+                break;
+            }
+        }
     }
     if (s_fly_n[s_fly_cur] < ORTA_FLY_N) {
         i = s_fly_n[s_fly_cur]++;
@@ -1992,7 +2018,7 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
     if (any && !near) {
         if (s_fly_logged < 40) {
             s_fly_logged++;
-            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), nearest of its record last frame %.1f px\n",
+            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), moved %.1f rows\n",
                     arg, cx, cy, x1 - x0, y1 - y0, best);
         }
         memcpy(&b, &off, 4);
@@ -3189,14 +3215,26 @@ static void mm_register(void)
         else if (!mm_record_text(GUEST32(0x0036E6D8u + 4u * (uint32_t)line), s_mm_text[r], sizeof s_mm_text[r]))
             s_mm_text[r][0] = 0;
         fprintf(stderr, "[MENU] row %d = line %d \"%s\"\n", r, line, s_mm_text[r]);
+        {
+            /* which cursor-row record is the line (2026-11-19 diagnosis): their own stock texts */
+            char a62c[48], a618[48];
+            if (!mm_record_text(GUEST32(0x0036E62Cu + 4u * (uint32_t)r), a62c, sizeof a62c)) strcpy(a62c, "(none)");
+            if (!mm_record_text(GUEST32(0x0036E618u + 4u * (uint32_t)r), a618, sizeof a618)) strcpy(a618, "(none)");
+            fprintf(stderr, "[MENU]   records: 62C %08X \"%s\", 618 %08X \"%s\"\n", GUEST32(0x0036E62Cu + 4u * (uint32_t)r),
+                    a62c, GUEST32(0x0036E618u + 4u * (uint32_t)r), a618);
+        }
     }
     for (r = 0; r < MM_ROWS; r++) {
         if (k_mm_line[r] == r || !s_mm_text[r][0]) continue;   /* PANDORAS BÜCHSE stays where it is */
         opt_settext_set(GUEST32(0x0036E6D8u + 4u * (uint32_t)r), s_mm_text[r]);
         opt_settext_set(GUEST32(0x0036E6B0u + 4u * (uint32_t)r), s_mm_text[r]);
-        /* the cursor row's own sprites (sub_000BF900: 0x36E62C / 0x36E618 on the cursor row, 0x36E604 elsewhere) */
+        /* the cursor row's own sprites (sub_000BF900: 0x36E62C / 0x36E618 on the cursor row, 0x36E604 elsewhere).
+         * 0x36E618 not (2026-11-19, iPhone: the cursor line under every moved row came out magnified - thicker and
+         * longer - and only PANDORA'S BOX, the one row without our SetText, was right): taken as the line's record,
+         * it keeps its stock look. ORTA_MM_SETTEXT_618=1 brings the old way back. */
         opt_settext_set(GUEST32(0x0036E62Cu + 4u * (uint32_t)r), s_mm_text[r]);
-        opt_settext_set(GUEST32(0x0036E618u + 4u * (uint32_t)r), s_mm_text[r]);
+        if (getenv("ORTA_MM_SETTEXT_618"))
+            opt_settext_set(GUEST32(0x0036E618u + 4u * (uint32_t)r), s_mm_text[r]);
     }
     s_mm_reg = 1;
 }

@@ -39,7 +39,7 @@ index 1e9b6b0..b97e666 100644
      /* This block: frame_buf holds the 256 VP/DSP samples of the last eight frames (zero when se_frame did not run,
       * since it is cleared after every block). Tone and software mixer go on top, in real time.
 diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
-index 4c19c68..d40c8ff 100644
+index 4c19c68..0258466 100644
 --- a/src/apu/apu_xaudio2.c
 +++ b/src/apu/apu_xaudio2.c
 @@ -18,7 +18,16 @@
@@ -103,7 +103,7 @@ index 4c19c68..d40c8ff 100644
      g_xbox_audio_surround = g_sdl_channels == 6;
      g_sdl_frames_written = 0;
      fprintf(stderr, "[AUDIO] SDL3 audio stream on '%s' (%d Hz %s 16-bit, up to %d x %d frames queued)\n",
-@@ -337,10 +376,52 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
+@@ -337,10 +376,81 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
      int bytes_per_frame = g_sdl_channels * (int)sizeof(int16_t);
      int n = num_samples > XA2_BUF_SAMPLES ? XA2_BUF_SAMPLES : num_samples;
  
@@ -134,10 +134,39 @@ index 4c19c68..d40c8ff 100644
 +        Uint64 now = SDL_GetTicks();
 +        if (q >= XA2_NUM_BUFS * XA2_BUF_SAMPLES * bytes_per_frame)
 +            return 0;
-+        if (q <= 0 && s_had) {
++        if (!s_had)
++            s_had = 1;                                   /* the first block gets the cushion too */
++        else if (q <= 0) {
 +            if (!s_dry)
 +                s_dry_t0 = now;
 +            s_dry++;
++        }
++        /* Keep a cushion (2026-11-19, iPhone log 56e0ab1d: the stream was found empty at 48 of 48 submissions a
++         * second - the APU and the device run at the same rate, so whatever was queued at the start (nothing) is
++         * all the cushion there ever is, and any mix that comes late is a gap). Below one block queued, silence
++         * up to two blocks goes in first: one short gap now, then ~43 ms of slack that stays. */
++        {
++            /* at most 2 paddings a second: if the device took the cushion at once every time (a backend that
++             * drains the stream greedily), padding on would turn the sound into silence - then it is left off */
++            static Uint64 s_pad_t0;
++            static int s_pad_n, s_pad_off;
++            if (now - s_pad_t0 >= 1000) { s_pad_t0 = now; s_pad_n = 0; }
++            if (!s_pad_off && q < XA2_BUF_SAMPLES * bytes_per_frame && ++s_pad_n > 2) {
++                s_pad_off = 1;
++                fprintf(stderr, "[AUDIO] the cushion does not hold (taken at once 3 times in a second): padding off\n");
++            }
++            if (s_pad_off) q = 1 << 30;                  /* no padding below */
++        }
++        if (q < XA2_BUF_SAMPLES * bytes_per_frame) {
++            static int16_t s_zero[XA2_BUF_SAMPLES * 6];
++            int pad = 2 * XA2_BUF_SAMPLES * bytes_per_frame - q;
++            while (pad > 0) {
++                int c = pad > (int)sizeof s_zero ? (int)sizeof s_zero : pad;
++                c -= c % bytes_per_frame;
++                if (c <= 0 || !SDL_PutAudioStreamData(g_sdl_stream, s_zero, c))
++                    break;
++                pad -= c;
++            }
 +        }
 +        if (s_dry && now - s_dry_t0 >= 1000) {          /* one line per second at most, never used up */
 +            if (s_dry_lines < 200) {
