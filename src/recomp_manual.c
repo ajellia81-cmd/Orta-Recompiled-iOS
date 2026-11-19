@@ -1929,29 +1929,29 @@ static void hud_snap_quad(uint32_t vp)
         GUEST32(vp + (uint32_t)j * 0x20u + 4u) = by;
     }
 }
-/* Menus: the options views park the lines they do not show far below the screen (row 40 + line, y ~1250) and
- * move them back when a view opens; a small sparkle of a line keeps one of its keys where it was and flies from
- * below the screen to the line in a few frames (~70 rows a frame; the Xbox original has no such flight - iPhone
- * video 2026-11-19, OPTIONS). Two keyed tries failed: by sprite record (the groove glints share one record: all
- * but one hid) and by record + 8 px column (the dot came back: build e65bf1f). Now no identity is needed: while the
- * options screen runs, a small sprite (<= 16 x 16) is drawn only if a sprite of the same record was near it in the
- * frame before (within 6 px both ways, or on the same row within 48 px: text sliding sideways; 20 px let the dot
- * through - it flies up the groove column past the glints of its record, build 762eb56) - or if the record drew nothing
- * then (a new one). The glints creep a pixel a frame and always have their own last position next to them; the
- * flying dot is 45+ rows from everything of its record. A legitimate jump (a small cursor) loses one frame. */
+/* Options: the views park the lines they do not show far below the screen (row 40 + line, y ~1250) and move the
+ * view's lines to their rows; the game slides the pieces there, so right after a view is laid out its label
+ * pieces fly up from below the screen (and the parked ones down out of it) for some 20 frames at 70-100 rows a
+ * frame (iPhone log b7d406c9 [FLY]; the Xbox original has nothing of the kind). Earlier rules ran all the time and
+ * either let the flight through or hid the right side's glints now and then - seen as noise flickering (iPhone
+ * 2026-11-20, build 3218e23: "one flight on entry, then noise appearing and disappearing"). Now only in the 700 ms
+ * after a layout (opt_layout: the screen opened or a view changed): a sprite up to 64 x 40 is drawn only if its
+ * record had a piece within 8 rows / 48 px of it in the frame before (a record not drawn then: its last place
+ * within 100 ms, 45 rows). After that window nothing is touched - the glints run as the game draws them. */
 static uint32_t s_opt_seen_ms;                 /* sub_000AF580 (the options screen's handler) last ran */
-#define ORTA_FLY_N 512
+static uint32_t s_opt_layout_ms;               /* opt_layout last ran */
+#define ORTA_FLY_N 1024
 static struct { uint32_t arg; float x, y; } s_fly[2][ORTA_FLY_N];
 static int s_fly_n[2], s_fly_cur;
 static uint32_t s_fly_frame_ms;
 static void menu_flight_hide(uint32_t arg, uint32_t vp)
 {
-    uint32_t now = (uint32_t)SDL_GetTicks(), b;
-    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy;
-    int j, i, any = 0, near = 0, prev;
-    float best = 1e30f;
+    static struct { uint32_t arg; float y; uint32_t t; } seen[256];
     static int s_fly_logged;
-    if (now - s_opt_seen_ms > 200u)
+    uint32_t now = (uint32_t)SDL_GetTicks(), b, hh;
+    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy, best = 1e30f;
+    int j, i, k, any = 0, near = 0, prev;
+    if (now - s_opt_seen_ms > 200u || now - s_opt_layout_ms > 700u)
         return;
     for (j = 0; j < 4; j++) {
         float x = orta_qx(vp + (uint32_t)j * 0x20u), y = orta_qx(vp + (uint32_t)j * 0x20u + 4u);
@@ -1960,53 +1960,46 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
         if (y < y0) y0 = y;
         if (y > y1) y1 = y;
     }
-    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f) || !(x0 > -2000.0f && x1 < 2000.0f && y0 > -2000.0f && y1 < 2000.0f))
+    if (!(x1 - x0 <= 64.0f && y1 - y0 <= 40.0f) || !(x0 > -2000.0f && x1 < 2000.0f && y0 > -2000.0f && y1 < 2000.0f))
         return;
     /* a new frame: the game thread emits a frame's sprites within a few ms; 8 ms of quiet starts the next list */
     if (now - s_fly_frame_ms > 8u) {
         s_fly_cur ^= 1;
         s_fly_n[s_fly_cur] = 0;
         if (now - s_fly_frame_ms > 100u)
-            s_fly_n[s_fly_cur ^ 1] = 0;                /* a gap: nothing to compare with */
+            s_fly_n[s_fly_cur ^ 1] = 0;
     }
     s_fly_frame_ms = now;
     cx = 0.5f * (x0 + x1);
     cy = 0.5f * (y0 + y1);
     prev = s_fly_cur ^ 1;
-    /* The rule of aedbebc (the build where the dot did not fly): a record that moved more than 45 rows since the
-     * frame before is hidden - but only a record drawn ONCE a frame. The groove glints share one record drawn many
-     * times a frame (aedbebc hid all of them but one); the flying dot is a record of its own. A record seen once
-     * last frame: its move from there; not seen last frame: its last place within 100 ms (seen[]). */
-    {
-        static struct { uint32_t arg; float y; uint32_t t; } seen[128];
-        int count = 0, k;
-        float py = 0.0f;
-        uint32_t hh = (arg >> 3) * 2654435761u >> 25;
-        for (i = 0; i < s_fly_n[prev]; i++)
-            if (s_fly[prev][i].arg == arg) { count++; py = s_fly[prev][i].y; }
-        for (i = 0; i < s_fly_n[s_fly_cur]; i++)
-            if (s_fly[s_fly_cur][i].arg == arg) count += 2;      /* already drawn this frame: a multi record */
-        if (count == 1) {
-            any = 1; best = fabsf(cy - py);
-            near = !(best > 45.0f);
-        } else if (count == 0) {
-            for (k = 0; k < 4; k++) {
-                i = (int)((hh + (uint32_t)k) & 127u);
-                if (seen[i].arg == arg && now - seen[i].t <= 100u) {
-                    any = 1; best = fabsf(cy - seen[i].y);
-                    near = !(best > 45.0f);
-                    break;
-                }
-            }
-        } else {
-            any = 0;                                              /* drawn more than once a frame: never hidden */
-        }
+    for (i = 0; i < s_fly_n[prev]; i++) {
+        float dx, dy;
+        if (s_fly[prev][i].arg != arg)
+            continue;
+        any = 1;
+        dx = fabsf(s_fly[prev][i].x - cx);
+        dy = fabsf(s_fly[prev][i].y - cy);
+        if (dy < best) best = dy;
+        if (dy <= 8.0f && dx <= 48.0f) { near = 1; break; }
+    }
+    hh = (arg >> 3) * 2654435761u >> 24;
+    if (!any) {
         for (k = 0; k < 4; k++) {
-            i = (int)((hh + (uint32_t)k) & 127u);
-            if (seen[i].arg == arg || seen[i].arg == 0 || now - seen[i].t > 1000u) {
-                seen[i].arg = arg; seen[i].y = cy; seen[i].t = now;
+            i = (int)((hh + (uint32_t)k) & 255u);
+            if (seen[i].arg == arg && now - seen[i].t <= 100u) {
+                any = 1;
+                best = fabsf(cy - seen[i].y);
+                near = !(best > 45.0f);
                 break;
             }
+        }
+    }
+    for (k = 0; k < 4; k++) {
+        i = (int)((hh + (uint32_t)k) & 255u);
+        if (seen[i].arg == arg || seen[i].arg == 0 || now - seen[i].t > 1000u) {
+            seen[i].arg = arg; seen[i].y = cy; seen[i].t = now;
+            break;
         }
     }
     if (s_fly_n[s_fly_cur] < ORTA_FLY_N) {
@@ -2016,9 +2009,9 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
         s_fly[s_fly_cur][i].y = cy;
     }
     if (any && !near) {
-        if (s_fly_logged < 40) {
+        if (s_fly_logged < 60) {
             s_fly_logged++;
-            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), moved %.1f rows\n",
+            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), %.1f rows from its last frame\n",
                     arg, cx, cy, x1 - x0, y1 - y0, best);
         }
         memcpy(&b, &off, 4);
@@ -2647,6 +2640,7 @@ static void opt_line_text(int line, const char *t)
 static void opt_layout(int view)
 {
     int line, moved = 0;
+    s_opt_layout_ms = (uint32_t)SDL_GetTicks();         /* the flight hiding's window (menu_flight_hide) */
     s_opt_view = view;
     s_opt_hidden = 0;
     for (line = 0; line < 9; line++) {                       /* 1: labels and values to their own parking rows */
@@ -2904,7 +2898,12 @@ void sub_000AF580(RECOMP_PARAMS)
     uint32_t obj = g_ecx, bits = obj ? GUEST32(obj + 0x18) : 0, cur;
     uint32_t move = bits & (0x01000000u | 0x02000000u);
     int k;
-    s_opt_seen_ms = (uint32_t)SDL_GetTicks();
+    {
+        uint32_t now_ = (uint32_t)SDL_GetTicks();
+        if (now_ - s_opt_seen_ms > 200u)
+            s_opt_layout_ms = now_;          /* the screen's first frames: the flight window starts here too */
+        s_opt_seen_ms = now_;
+    }
     if (!obj || !opt_views_on()) { sub_000AF580_gen(ctx, base); return; }
     {
         uint32_t d = opt_label_data();

@@ -13,7 +13,7 @@ index 465a4c9..db8ed6c 100644
  endif()
  
 diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
-index 1e9b6b0..b97e666 100644
+index 1e9b6b0..6df8f4f 100644
 --- a/src/apu/apu_core.c
 +++ b/src/apu/apu_core.c
 @@ -602,6 +602,21 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
@@ -38,6 +38,29 @@ index 1e9b6b0..b97e666 100644
  
      /* This block: frame_buf holds the 256 VP/DSP samples of the last eight frames (zero when se_frame did not run,
       * since it is cleared after every block). Tone and software mixer go on top, in real time.
+@@ -713,10 +728,22 @@ static void throttle(X86Ctx *ctx, MCPXAPUState *d)
+ 
+     int64_t now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+ 
++#if defined(__APPLE__)
++    /* iOS (2026-11-19, iPhone log b7d406c9): a period that started more than one period late dropped the time it
++     * was behind - no catch-up - so every late wake (25-30 ms at a RECOMP option change, smaller ones from timer
++     * coalescing) took that much sound out of the device's queue for good: it ran dry every 1-2 s, a tiny break
++     * each time. Up to 150 ms behind is now caught up (periods back to back, the queue holds up to 128 ms);
++     * only more than that (a stop, the app in the background) starts over from now. */
++    if (d->next_frame_time_us == 0 ||
++        now_us - d->next_frame_time_us > 150000) {
++        d->next_frame_time_us = now_us;
++    }
++#else
+     if (d->next_frame_time_us == 0 ||
+         now_us - d->next_frame_time_us > EP_FRAME_US) {
+         d->next_frame_time_us = now_us;
+     }
++#endif
+ 
+     while (!d->pause_requested) {
+         now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
 index 4c19c68..0258466 100644
 --- a/src/apu/apu_xaudio2.c
