@@ -69,8 +69,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- No CADisableMinimumFrameDurationOnPhone: the game runs at 60 Hz, and 120 Hz would only add heat (the Lost
-	     World iOS port's finding) -->
+	<!-- 120 Hz for the frame pacing: the guest's 60 Hz is every 2nd refresh of the display link (ios_app.m), each
+	     frame exactly two refreshes - at a 60 Hz cap the 60 Hz timer drifted against the display: stutter -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<!-- game/ saves/ data/ media/ in the Files app (inside LiveContainer: the data folder it gives the app) -->
 	<key>UIFileSharingEnabled</key>
 	<true/>

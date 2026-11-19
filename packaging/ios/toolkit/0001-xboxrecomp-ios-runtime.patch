@@ -166,7 +166,7 @@ index 8bb17ea..a8ae389 100644
  #elif !XR_HOST_SINGLE_STEP
      (void)old;
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index ec863b3..372e97a 100644
+index ec863b3..a16f3d9 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -74,6 +74,14 @@
@@ -278,7 +278,22 @@ index ec863b3..372e97a 100644
  #if defined(__SWITCH__)
  #include <pthread.h>
  #endif
-@@ -3756,15 +3851,19 @@ static int sc_extent_changed(void)
+@@ -227,6 +322,14 @@ static void display_hz_update(void)
+         if (hwnd)
+             xbox_GuestDisplayPacing(hwnd);
+     }
++#elif defined(XR_VK_IOS)
++    {
++        /* iOS: the same, the display's refresh from the app's CADisplayLink (host_vblank.c) - there is one screen,
++         * so the window only says "now" */
++        extern void xbox_GuestDisplayPacing(void *native_window);
++        if (s_win)
++            xbox_GuestDisplayPacing((void *)s_win);
++    }
+ #endif
+ }
+ #endif
+@@ -3756,15 +3859,19 @@ static int sc_extent_changed(void)
      sc_choose(&caps, &e, &pre);
      return e.width != 0xFFFFFFFFu && (e.width != s_sc_extent.width || e.height != s_sc_extent.height);
  }
@@ -299,7 +314,7 @@ index ec863b3..372e97a 100644
      }
      return true;
  }
-@@ -3814,6 +3913,19 @@ static int surface_recreate(void)
+@@ -3814,6 +3921,19 @@ static int surface_recreate(void)
  static int sc_ready(void)
  {
      static unsigned retry;
@@ -319,7 +334,7 @@ index ec863b3..372e97a 100644
      if (SDL_GetAtomicInt(&s_sc_background))
          return 0;
      if (!SDL_GetAtomicInt(&s_sc_lost) && s_swapchain)
-@@ -4184,7 +4296,7 @@ static int ready(void)
+@@ -4184,7 +4304,7 @@ static int ready(void)
      VkPhysicalDeviceExtendedDynamicStateFeaturesEXT feds =
          { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT };
      VkPhysicalDeviceFeatures have;
@@ -328,7 +343,7 @@ index ec863b3..372e97a 100644
      uint32_t ndext = 0;
      const char *layers[1];
      uint32_t nlayers = 0;
-@@ -4444,7 +4556,7 @@ static int ready(void)
+@@ -4444,7 +4564,7 @@ static int ready(void)
          snprintf(w, sizeof w, "The window's Vulkan surface could not be created (SDL: %s).", SDL_GetError());
          vk_fatal(w);
      }
@@ -337,7 +352,7 @@ index ec863b3..372e97a 100644
      if (!s_headless)
          SDL_AddEventWatch(sc_event_watch, NULL);    /* background / foreground: the surface's life */
  #endif
-@@ -4480,6 +4592,13 @@ static int ready(void)
+@@ -4480,6 +4600,13 @@ static int ready(void)
                      s_have_budget = 1;
                      break;
                  }
@@ -351,6 +366,50 @@ index ec863b3..372e97a 100644
      }
      dci.pNext = &f2;
      dci.queueCreateInfoCount = 1;
+diff --git a/src/platform/host_vblank.c b/src/platform/host_vblank.c
+index 66434b5..45c6897 100644
+--- a/src/platform/host_vblank.c
++++ b/src/platform/host_vblank.c
+@@ -104,7 +104,38 @@ void host_vblank_close(void)
+     s_open = 0;
+ }
+ 
+-#else
++#elif defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
++
++#if defined(__APPLE__) && TARGET_OS_IPHONE && !defined(_WIN32)
++/* iOS (2026-11-19): the display's refresh through a CADisplayLink the app runs (Objective-C, so in the port:
++ * packaging/ios ios_app.m - weak here, a build without it has no display pacing). Without it the guest vblank ran
++ * on the 60 Hz timer beside a display it does not know, and the two drifted: a frame shown twice, the next one
++ * skipped, over and over (the first iPhone run's stutter). With the app's 120 Hz (CADisableMinimumFrameDuration-
++ * OnPhone) FRAME PACING Display then takes every 2nd refresh, as on a Windows 120 Hz monitor. */
++extern int xr_ios_vblank_open(void) __attribute__((weak));
++extern int xr_ios_vblank_wait(void) __attribute__((weak));
++extern void xr_ios_vblank_close(void) __attribute__((weak));
++
++int host_vblank_open(void *native_window)
++{
++    (void)native_window;
++    return xr_ios_vblank_open ? xr_ios_vblank_open() : 0;
++}
++
++int host_vblank_wait(void)
++{
++    return xr_ios_vblank_wait ? xr_ios_vblank_wait() : 0;
++}
++
++void host_vblank_close(void)
++{
++    if (xr_ios_vblank_close)
++        xr_ios_vblank_close();
++}
++
++#elif !defined(_WIN32)
+ 
+ int host_vblank_open(void *native_window)
+ {
 diff --git a/src/platform/mmio_decode.h b/src/platform/mmio_decode.h
 index 391ef1d..d564cd8 100644
 --- a/src/platform/mmio_decode.h

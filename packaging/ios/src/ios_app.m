@@ -1,9 +1,11 @@
 /* ios_app.m - see ios_app.h. SPDX-License-Identifier: GPL-3.0-or-later */
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <SDL3/SDL.h>
 #include <pthread.h>
+#include <time.h>
 #include <stdio.h>
 
 #include "ios_app.h"
@@ -86,6 +88,81 @@ static void overlay_when_window(void)
     }];
 }
 
+/* ── the display's refresh for FRAME PACING Display (toolkit host_vblank.c, iOS branch) ──────────────────────
+ * A CADisplayLink on a thread of its own (its own run loop: the main thread's may be busy) asks for 120 Hz - the app
+ * may use it (Info.plist CADisableMinimumFrameDurationOnPhone) - and counts refreshes; the toolkit's pacing thread
+ * waits on the count. The guest's 60 Hz is then every 2nd refresh and each frame stays exactly two refreshes. */
+@interface OrtaVBlank : NSObject
+- (void)tick:(CADisplayLink *)l;
+@end
+static pthread_mutex_t s_vb_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t s_vb_cv = PTHREAD_COND_INITIALIZER;
+static uint64_t s_vb_n;
+static volatile int s_vb_running;
+@implementation OrtaVBlank
+- (void)tick:(CADisplayLink *)l
+{
+    (void)l;
+    pthread_mutex_lock(&s_vb_mx);
+    s_vb_n++;
+    pthread_cond_broadcast(&s_vb_cv);
+    pthread_mutex_unlock(&s_vb_mx);
+}
+@end
+
+static void *vblank_thread(void *u)
+{
+    (void)u;
+    pthread_setname_np("display link");
+    @autoreleasepool {
+        OrtaVBlank *t = [OrtaVBlank new];
+        CADisplayLink *l = [CADisplayLink displayLinkWithTarget:t selector:@selector(tick:)];
+        if (@available(iOS 15.0, *))
+            l.preferredFrameRateRange = CAFrameRateRangeMake(120, 120, 120);
+        [l addToRunLoop:NSRunLoop.currentRunLoop forMode:NSRunLoopCommonModes];
+        fprintf(stderr, "[IOS] display link: up to %ld Hz\n", (long)UIScreen.mainScreen.maximumFramesPerSecond);
+        for (;;)
+            [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:NSDate.distantFuture];
+    }
+    return NULL;
+}
+
+int xr_ios_vblank_open(void)
+{
+    if (!s_vb_running) {
+        pthread_t t;
+        s_vb_running = 1;
+        if (pthread_create(&t, NULL, vblank_thread, NULL) != 0) {
+            s_vb_running = 0;
+            return 0;
+        }
+        pthread_detach(t);
+    }
+    return 1;
+}
+
+/* the next refresh; 0 when none came in 250 ms (in the background the link stops: the pacing falls back to its
+ * timer and binds again with the next window / display change) */
+int xr_ios_vblank_wait(void)
+{
+    struct timespec ts;
+    uint64_t start;
+    int ok = 1;
+    pthread_mutex_lock(&s_vb_mx);
+    start = s_vb_n;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 250000000L;
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+    while (s_vb_n == start && ok)
+        ok = pthread_cond_timedwait(&s_vb_cv, &s_vb_mx, &ts) == 0 || s_vb_n != start;
+    pthread_mutex_unlock(&s_vb_mx);
+    return s_vb_n != start;
+}
+
+void xr_ios_vblank_close(void)
+{
+}
+
 /* ── the disc image at the first start (the Android launcher's "choose the disc image" in the system picker) ── */
 
 @interface OrtaDiscPicker : NSObject <UIDocumentPickerDelegate>
@@ -155,6 +232,8 @@ int orta_ios_pick_disc(char *out, size_t n)
 
 void orta_ios_start(void)
 {
+    /* MoltenVK: compile shaders / pipelines on every core (fewer and shorter hitches when a scene first appears) */
+    setenv("MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", "1", 0);
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");        /* dimmed; a first swipe does not leave the game */
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");            /* touches stay touches (the overlay has them) */
