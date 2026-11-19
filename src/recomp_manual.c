@@ -1921,6 +1921,59 @@ static int hud_log_on(void)
     }
     return on;
 }
+/* Outside play, wider than 16:9: the 2D is cut at the 16:9 picture's edges (fb 320 -+ (320 x 4/3) / f, where the
+ * menus' backdrop ends). On a 16:9 TV everything past them is off the screen; here the side bars showed it - the
+ * menu cursor's line sweeping in from beyond the right edge (iPhone 18 Pro Max video 2026-11-19). Quads wholly
+ * outside are moved off the screen; quads across an edge are cut there with their texture coordinates (an
+ * axis-aligned sprite: 2 x values, u per x the same - vertex = x y z rhw diffuse specular u v, 0x20 bytes; anything
+ * else is left as it is). */
+static void hud_clip_16x9(int n, uint32_t lo, uint32_t hi, float f)
+{
+    float half = (320.0f * 4.0f / 3.0f) / f, L = 320.0f - half, R = 320.0f + half;
+    int i, j;
+    for (i = 0; i < n; i++) {
+        uint32_t va = s_hud_q[i], b;
+        float x[4], u[4], xl = 1e30f, xr = -1e30f, ul = 0.0f, ur = 0.0f, nl, nr;
+        int ok = 1, hl = 0, hr = 0;
+        if (va < lo || va + 0x80u > hi)
+            continue;
+        for (j = 0; j < 4; j++) {
+            x[j] = orta_qx(va + (uint32_t)j * 0x20u);
+            u[j] = orta_qx(va + (uint32_t)j * 0x20u + 0x18u);
+            if (!(x[j] > -4000.0f && x[j] < 4000.0f))
+                ok = 0;
+            if (x[j] < xl) xl = x[j];
+            if (x[j] > xr) xr = x[j];
+        }
+        if (!ok || (xl >= L && xr <= R))
+            continue;
+        if (xr <= L || xl >= R) {                    /* wholly outside: off the screen */
+            float off = -4096.0f;
+            memcpy(&b, &off, 4);
+            for (j = 0; j < 4; j++)
+                GUEST32(va + (uint32_t)j * 0x20u) = b;
+            continue;
+        }
+        for (j = 0; j < 4; j++) {
+            if (!(u[j] > -64.0f && u[j] < 64.0f)) ok = 0;
+            if (fabsf(x[j] - xl) < 0.01f) { if (hl && fabsf(u[j] - ul) > 1e-5f) ok = 0; ul = u[j]; hl = 1; }
+            else if (fabsf(x[j] - xr) < 0.01f) { if (hr && fabsf(u[j] - ur) > 1e-5f) ok = 0; ur = u[j]; hr = 1; }
+            else ok = 0;
+        }
+        if (!ok || !hl || !hr || xr - xl < 0.01f)
+            continue;
+        nl = xl < L ? L : xl;
+        nr = xr > R ? R : xr;
+        for (j = 0; j < 4; j++) {
+            float nx = fabsf(x[j] - xl) < 0.01f ? nl : nr, nu = ul + (ur - ul) * (nx - xl) / (xr - xl);
+            memcpy(&b, &nx, 4);
+            GUEST32(va + (uint32_t)j * 0x20u) = b;
+            memcpy(&b, &nu, 4);
+            GUEST32(va + (uint32_t)j * 0x20u + 0x18u) = b;
+        }
+    }
+}
+
 void sub_0006A520(RECOMP_PARAMS)
 {
     float f = orta_aspect_factor();
@@ -1928,6 +1981,8 @@ void sub_0006A520(RECOMP_PARAMS)
     uint32_t lo = GUEST32(0x46F894u), hi = GUEST32(0x46F890u);
     s_hud_n = 0;
     s_hud_batch++;
+    if (f > 4.0f / 3.0f + 0.01f && n > 0 && !hud_in_play())
+        hud_clip_16x9(n, lo, hi, f);
     if (f > 0.0f && n > 0) {
         static float bx0[ORTA_HUD_MAXQ], bx1[ORTA_HUD_MAXQ];
         static uint32_t bq[ORTA_HUD_MAXQ];
