@@ -1874,6 +1874,39 @@ void sub_00069A90(RECOMP_PARAMS)
 }
 
 extern void sub_0006A520_gen(RECOMP_PARAMS);
+static uint32_t s_pause_seen_ms, s_hud_last_play;   /* sub_001B4BA0 (the pause menu) / hud_in_play */
+static int s_pause_from_play;
+/* In play? The HUD anchoring is for the play HUD (gauge, radar, lock-on counters); the menus, the title, the
+ * episode screens and the results are laid out as a whole, and moving their side pieces tore them apart (the help
+ * panel's MENU tab, list arrows, sliding titles - iPhone 18 Pro Max log 2026-11-19, 141 groups moved outside play).
+ * Play = the player object (0x474230) with its section counter (+0x6C) running in the last 1.5 s (orta_cheat_thread:
+ * it stands still in menus, the pause, cut scenes); the pause menu keeps the play layout while it is up, so the
+ * gauge does not jump in behind it. ORTA_HUD_ANCHOR=all: everywhere (the maintainer's rule). */
+static int hud_in_play(void)
+{
+    static int all = -1;
+    static uint32_t last_sec, last_change;
+    uint32_t now = (uint32_t)SDL_GetTicks(), p = GUEST32(0x474230u);
+    if (all < 0) {
+        const char *e = getenv("ORTA_HUD_ANCHOR");
+        all = e && !strcmp(e, "all");
+    }
+    if (all)
+        return 1;
+    if (p >= 0x10000u && p <= 0x3FF0000u) {
+        uint32_t sec = GUEST32(p + 0x06Cu);
+        if (sec != last_sec) {
+            last_sec = sec;
+            last_change = now;
+        }
+        if (now - last_change < 1500u) {
+            s_hud_last_play = now;
+            return 1;
+        }
+    }
+    /* the pause menu over play (its handler ran in the last 0.2 s, and it opened during play) */
+    return now - s_pause_seen_ms < 200u && s_pause_from_play;
+}
 static uint32_t s_hud_batch;                       /* batches drawn so far (the log tells neighbours apart) */
 static int hud_log_on(void)
 {
@@ -1929,6 +1962,7 @@ void sub_0006A520(RECOMP_PARAMS)
             static float gd[ORTA_HUD_MAXQ];
             static int gi[ORTA_HUD_MAXQ + 1];
             uint32_t now = (uint32_t)SDL_GetTicks();
+            int play = hud_in_play();
             float gap = 32.0f / s16;                 /* 32 px of the 16:9 layout in frame pixels */
             int ng = 0, g, w;
             for (i = 0; i < m; i = j) {
@@ -1945,7 +1979,8 @@ void sub_0006A520(RECOMP_PARAMS)
                 gx0[ng] = bx0[i]; gx1[ng] = g1; gy0[ng] = y0; gy1[ng] = y1; gi[ng] = i;
                 c16 = 320.0f + (0.5f * (bx0[i] + g1) - 320.0f) * s16;
                 gd[ng] = 0.0f;
-                if ((g1 - bx0[i]) * s16 <= 384.0f) {
+                /* (bounds out of +-2000: NaN / unset vertices, a group of nothing - left alone) */
+                if (play && bx0[i] > -2000.0f && g1 < 2000.0f && (g1 - bx0[i]) * s16 <= 384.0f) {
                     if (c16 < 640.0f / 3.0f) gd[ng] = -dmove;
                     else if (c16 > 1280.0f / 3.0f) gd[ng] = dmove;
                 }
@@ -3475,6 +3510,12 @@ static int pm_on(void)
 void sub_001B4BA0(RECOMP_PARAMS)
 {
     uint32_t obj = g_ecx;
+    {
+        uint32_t now = (uint32_t)SDL_GetTicks();     /* the HUD anchoring keeps the play layout behind the pause */
+        if (now - s_pause_seen_ms > 500u)
+            s_pause_from_play = s_hud_last_play && now - s_hud_last_play < 3000u;
+        s_pause_seen_ms = now;
+    }
     static uint32_t last_st = 99;
     uint32_t st = obj ? GUEST32(obj + 0x134) : 0;
     if (obj && pm_on()) {
