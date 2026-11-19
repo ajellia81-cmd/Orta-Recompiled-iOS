@@ -5,6 +5,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <SDL3/SDL.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 #include <time.h>
 #include <stdio.h>
 
@@ -43,6 +44,8 @@ int orta_ios_run_game(int (*fn)(void *), void *arg)
     SDL_SetAtomicInt(&g.done, 0);
     pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 16u << 20);   /* the guest's first thread: the main thread's 1 MB is too little */
+    /* user-interactive like the main thread: the default class runs on the efficiency cores with coalesced timers */
+    pthread_attr_set_qos_class_np(&at, QOS_CLASS_USER_INTERACTIVE, 0);
     if (pthread_create(&t, &at, game_entry, &g) != 0) {
         pthread_attr_destroy(&at);
         fprintf(stderr, "[IOS] game thread could not be started - running on the main thread\n");
@@ -131,8 +134,14 @@ int xr_ios_vblank_open(void)
 {
     if (!s_vb_running) {
         pthread_t t;
+        pthread_attr_t at;
+        int rc;
         s_vb_running = 1;
-        if (pthread_create(&t, NULL, vblank_thread, NULL) != 0) {
+        pthread_attr_init(&at);
+        pthread_attr_set_qos_class_np(&at, QOS_CLASS_USER_INTERACTIVE, 0);
+        rc = pthread_create(&t, &at, vblank_thread, NULL);
+        pthread_attr_destroy(&at);
+        if (rc != 0) {
             s_vb_running = 0;
             return 0;
         }
@@ -267,4 +276,32 @@ void orta_ios_start(void)
     touchpad_init();
     xbox_InputSetPadPriority(touchpad_pad_priority);   /* a real pad stays player 1's first choice */
     overlay_when_window();
+}
+
+void orta_ios_seed_caches(const char *data_dir)
+{
+    static const char *const names[] = { "progcache.bin", "vkspirv.bin", "vkpipes.bin", "vkpipes_vi.bin" };
+    @autoreleasepool {
+        NSString *seed = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"seed"];
+        NSString *dst = [NSString stringWithUTF8String:data_dir];
+        NSFileManager *fm = NSFileManager.defaultManager;
+        unsigned i;
+        for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+            NSString *n = [NSString stringWithUTF8String:names[i]];
+            NSString *from = [seed stringByAppendingPathComponent:n], *to = [dst stringByAppendingPathComponent:n];
+            NSError *err = nil;
+            if (![fm fileExistsAtPath:from])
+                continue;
+            if ([fm fileExistsAtPath:to]) {
+                fprintf(stderr, "[IOS] cache seed: data/%s is there - kept\n", names[i]);
+                continue;
+            }
+            if ([fm copyItemAtPath:from toPath:to error:&err])
+                fprintf(stderr, "[IOS] cache seed: data/%s from the app (%llu KB)\n", names[i],
+                        [[fm attributesOfItemAtPath:to error:nil] fileSize] / 1024ull);
+            else
+                fprintf(stderr, "[IOS] cache seed: data/%s not copied (%s)\n", names[i],
+                        err.localizedDescription.UTF8String);
+        }
+    }
 }

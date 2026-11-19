@@ -47,6 +47,7 @@
 #include <os/log.h>
 #if TARGET_OS_IPHONE
 #define ORTA_IOS 1
+#include "ios_app.h"                /* orta_ios_seed_caches */
 #endif
 extern char **environ;              /* Darwin's unistd.h does not declare it */
 #endif
@@ -592,6 +593,9 @@ int host_init(int argc, char **argv, HostOptions *opt)
     }
     if (chdir(opt->data_dir) != 0)
         fprintf(stderr, "[HOST] chdir %s failed (errno %d)\n", opt->data_dir, errno);
+#ifdef ORTA_IOS
+    orta_ios_seed_caches(opt->data_dir);   /* the app's pipeline lists: no first-time compile stutter */
+#endif
     RECOMP_ICALL_FEEDBACK_INIT();
     install_crash_handlers();
 

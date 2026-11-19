@@ -29,6 +29,11 @@ int orta_ios_game_dir_has_image(const char *game_dir);
  * (recomp_manual.c, main.c). */
 int orta_ios_native_lines(void);
 
+/* The renderer's shader / pipeline lists shipped in the app (OrtaRecomp.app/seed: progcache.bin, vkspirv.bin,
+ * vkpipes.bin) copied into data_dir where it has none yet, so the boot prewarm builds every pipeline before the
+ * first frame and no scene stutters the first time it is played (host_linux.c, before the renderer starts). */
+void orta_ios_seed_caches(const char *data_dir);
+
 /* Runs fn(arg) on a new thread with a 16 MB stack and pumps the main thread's events until it returns; returns its
  * result. Call it on the main thread, after orta_ios_start. */
 int orta_ios_run_game(int (*fn)(void *), void *arg);

@@ -153,6 +153,13 @@ OUT=$ROOT/out/ios
 STAGE=$OUT/Payload
 rm -rf "$OUT" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
+# the renderer's shader / pipeline lists from a played game (private release "xbe", optional): seeded into data/ on
+# the first start (ios_app.m orta_ios_seed_caches), so the boot prewarm has them all before the first scene
+if [ -n "${ORTA_SEED_DIR:-}" ] && ls "$ORTA_SEED_DIR"/*.bin >/dev/null 2>&1; then
+    mkdir -p "$STAGE/OrtaRecomp.app/seed"
+    cp "$ORTA_SEED_DIR"/*.bin "$STAGE/OrtaRecomp.app/seed/"
+    echo "  cache seed: $(cd "$ORTA_SEED_DIR" && ls *.bin | tr '\n' ' ')"
+fi
 sips -z 120 120 assets/icon_256.png --out "$STAGE/OrtaRecomp.app/AppIcon60x60@2x.png" >/dev/null
 sips -z 180 180 assets/icon_256.png --out "$STAGE/OrtaRecomp.app/AppIcon60x60@3x.png" >/dev/null
 mkdir -p "$STAGE/OrtaRecomp.app/licenses"

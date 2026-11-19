@@ -54,6 +54,12 @@ jobs:
             exit 1
           fi
           ls -l default.xbe
+          # optional: the renderer's cache lists from a played game (progcache.bin, vkspirv.bin, vkpipes.bin) - the app
+          # seeds them into data/ on its first start, so no scene compiles shaders the first time it is played
+          mkdir -p seed
+          for f in progcache.bin vkspirv.bin vkpipes.bin vkpipes_vi.bin; do
+            gh release download xbe -R "$PRIVATE_REPO" --pattern "$f" --dir seed 2>/dev/null && echo "seed: $f" || true
+          done
 
       - name: Dependencies (cache)
         uses: actions/cache@v4
@@ -64,6 +70,7 @@ jobs:
       - name: Build
         env:
           ORTA_IOS_CHECK: ${{ inputs.mode == 'check' && '1' || '' }}
+          ORTA_SEED_DIR: seed
         run: bash tools/build_ios.sh default.xbe
 
       - name: OrtaRecomp.ipa (private repository, release "latest")
@@ -79,4 +86,4 @@ jobs:
         # never published here
       - name: Clean up
         if: always()
-        run: rm -rf default.xbe out/ios build/ios/gen build/ios/pipe
+        run: rm -rf default.xbe seed out/ios build/ios/gen build/ios/pipe
