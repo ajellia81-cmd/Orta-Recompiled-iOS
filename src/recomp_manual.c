@@ -939,7 +939,7 @@ static int opt_set_add(int which, uint32_t key, int depth)
 }
 
 /* x_lo..x_hi: the column filter of the move mode (labels / bar left of OPT_VALUE_X, values right of it). */
-static uint32_t s_walk_x_lo = 21, s_walk_x_hi = 639;
+static uint32_t s_walk_x_lo = 21, s_walk_x_hi = 600;
 /* diagnosis (2026-11-20, the right side's glints fly up from below when OPTIONS opens, fine in SOUND / RECOMP):
  * the words the screen's first layout moves right of x 400 - record id, place before and after */
 static int s_walk_log;
@@ -968,7 +968,7 @@ static int opt_shift_walk(uint32_t p, int depth, uint32_t old_y, int dy)
          * 20261104_103651_opt_bind1) */
         if (x > 20 && x < 640 && y + 26 >= old_y && y <= old_y + (x < 200u /* OPT_VALUE_X */ ? 5u : 12u) && y >= 20) {
             if (x >= s_walk_x_lo && x <= s_walk_x_hi && opt_set_add(1, a, 0)) {
-                if (s_walk_log > 0 && x >= 400u) {
+                if (s_walk_log > 0 && x >= 560u) {
                     s_walk_log--;
                     fprintf(stderr, "[WALK] line %u record %03X word %08X: x %u y %u -> %d\n", s_walk_line, s_walk_id, a,
                             x, y, (int)y + dy);
@@ -1004,7 +1004,11 @@ static int opt_shift_line(int line, int from_row, int to_row, int mode)
     if (dy == 0) return 0;
     if (++s_gen == 0) s_gen = 1;   /* new generation = both sets empty */
     s_walk_x_lo = mode == OPT_MV_VALUE ? OPT_VALUE_X : 21u;
-    s_walk_x_hi = mode == OPT_MV_LABEL ? OPT_VALUE_X - 1u : 639u;
+    /* Right of x 600: the screen's right-edge grooves, whose keys the glints run along - the first layout moved
+     * them with the lines (iPhone log cec5cc1f [WALK]: line 0's record 150 x 628..639 y 25..29 -> 1825..1829, line
+     * 3's record 158 x 633 y 132 -> 1932), so the glints flew up from below the screen on OPTIONS (2026-11-20).
+     * No label or value reaches past 600 (volume dots end at 580). */
+    s_walk_x_hi = mode == OPT_MV_LABEL ? OPT_VALUE_X - 1u : 600u;
     for (; n && guard < 4096; n = GUEST32(n + 0x18), guard++) {
         uint32_t id = GUEST32(n), data = GUEST32(n + 4), sib;
         int links;
