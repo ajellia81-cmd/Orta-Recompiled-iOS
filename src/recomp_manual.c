@@ -1871,39 +1871,85 @@ static int hud_in_play(void);
 extern void nv2a_vk_render_scale_get(double *kx, double *ky);
 /* The 2D on whole host pixels: the frame is rendered at a scale that is no whole number (iPhone: 4.48 x 2.946),
  * so a one-row line came out 2 or 3 host pixels thick depending on its row - the menu cursor lines differed from
- * item to item (2026-11-19). Each corner of a 2D quad is moved to the nearest host pixel edge (at most half a
- * host pixel), so the same guest size is always the same host size. Scale 1: nothing. */
+ * item to item (2026-11-19). The way a 2D corner reaches the host: the XDK's screen-space program adds the viewport
+ * bias 0.53125, the rasteriser truncates to 1/16 of a title pixel, the render scale's centre offset comes off
+ * (toolkit nv2a_snap: off = 0.5 - 0.5 / k), times k. The first try rounded y * k and ignored bias and truncation:
+ * the edges still fell 0.41..0.59 past a whole host pixel, on either side of a pixel centre (thickness unchanged,
+ * build e65bf1f). Now each corner is placed so that the host edge after all of that is within 0.1 of a whole host
+ * pixel: the title-space value on the 1/16 grid nearest to it, a 1/256 above so the truncation keeps it, and the
+ * far edge a whole number of host pixels from the near one (the quad's size, rounded). The scale
+ * is the surfaces' real one (whole host pixels: 640 -> 2868, 480 -> 1414). Scale 1: nothing. */
+#define ORTA_SNAP_BIAS 0.53125
+/* the host pixel edge a title coordinate lands on (rounded), and the title coordinate that lands on host edge t */
+static double orta_snap_t(double v, double k) { return floor((v + ORTA_SNAP_BIAS - (0.5 - 0.5 / k)) * k + 0.5); }
+static double orta_snap_v(double t, double k)
+{
+    double off = 0.5 - 0.5 / k, q = floor((t / k + off) * 16.0 + 0.5) / 16.0;
+    return q - ORTA_SNAP_BIAS + 1.0 / 256.0;
+}
+/* One axis of a quad: the low edge to its nearest host pixel, the high edge that many whole host pixels further
+ * as the quad's size gives (rounded) - a one-row line is 3 host pixels at every row, not 3 here and 2 there. */
+static void orta_snap_axis(float *v, int n, double k)
+{
+    float lo = 1e30f, hi = -1e30f;
+    double tl, th;
+    int j;
+    for (j = 0; j < n; j++) { if (v[j] < lo) lo = v[j]; if (v[j] > hi) hi = v[j]; }
+    tl = orta_snap_t(lo, k);
+    th = tl + floor((double)(hi - lo) * k + 0.5);
+    for (j = 0; j < n; j++) {
+        if (v[j] == lo) v[j] = (float)orta_snap_v(tl, k);
+        else if (v[j] == hi) v[j] = (float)orta_snap_v(th, k);
+        else v[j] = (float)orta_snap_v(orta_snap_t(v[j], k), k);
+    }
+}
 static void hud_snap_quad(uint32_t vp)
 {
     double kx, ky;
+    float x[4], y[4];
     int j;
     nv2a_vk_render_scale_get(&kx, &ky);
     if (!(kx > 1.01 || ky > 1.01))
         return;
+    kx = floor(640.0 * kx + 0.5) / 640.0;
+    ky = floor(480.0 * ky + 0.5) / 480.0;
     for (j = 0; j < 4; j++) {
-        uint32_t a = vp + (uint32_t)j * 0x20u, b;
-        float x = orta_qx(a), y = orta_qx(a + 4u);
-        if (!(x > -2000.0f && x < 2000.0f && y > -2000.0f && y < 2000.0f))
-            continue;
-        x = (float)(floor((double)x * kx + 0.5) / kx);
-        y = (float)(floor((double)y * ky + 0.5) / ky);
-        memcpy(&b, &x, 4);
-        GUEST32(a) = b;
-        memcpy(&b, &y, 4);
-        GUEST32(a + 4u) = b;
+        x[j] = orta_qx(vp + (uint32_t)j * 0x20u);
+        y[j] = orta_qx(vp + (uint32_t)j * 0x20u + 4u);
+        if (!(x[j] > -2000.0f && x[j] < 2000.0f && y[j] > -2000.0f && y[j] < 2000.0f))
+            return;                                     /* parked / hidden: left alone */
+    }
+    if (kx > 1.01) orta_snap_axis(x, 4, kx);
+    if (ky > 1.01) orta_snap_axis(y, 4, ky);
+    for (j = 0; j < 4; j++) {
+        uint32_t bx, by;
+        memcpy(&bx, &x[j], 4);
+        memcpy(&by, &y[j], 4);
+        GUEST32(vp + (uint32_t)j * 0x20u) = bx;
+        GUEST32(vp + (uint32_t)j * 0x20u + 4u) = by;
     }
 }
 /* Menus: the options views park the lines they do not show far below the screen (row 40 + line, y ~1250) and
  * move them back when a view opens; a small sparkle of a line keeps one of its keys where it was and flies from
- * below the screen to the line in a few frames (~70 rows a frame, the Xbox original has no such flight - iPhone
- * video 2026-11-19, OPTIONS). Outside play, a small sprite (<= 16 x 16) that moved more than 45 rows since the
- * frame before is not drawn until it settles; the groove glints creep a row a frame, a cursor jumps 30. */
+ * below the screen to the line in a few frames (~70 rows a frame; the Xbox original has no such flight - iPhone
+ * video 2026-11-19, OPTIONS). Two keyed tries failed: by sprite record (the groove glints share one record: all
+ * but one hid) and by record + 8 px column (the dot came back: build e65bf1f). Now no identity is needed: while the
+ * options screen runs, a small sprite (<= 16 x 16) is drawn only if a sprite of the same record was near it in the
+ * frame before (within 20 px both ways, or on the same row: text sliding sideways) - or if the record drew nothing
+ * then (a new one). The glints creep a pixel a frame and always have their own last position next to them; the
+ * flying dot is 45+ rows from everything of its record. A legitimate jump (a small cursor) loses one frame. */
+static uint32_t s_opt_seen_ms;                 /* sub_000AF580 (the options screen's handler) last ran */
+#define ORTA_FLY_N 512
+static struct { uint32_t arg; float x, y; } s_fly[2][ORTA_FLY_N];
+static int s_fly_n[2], s_fly_cur;
+static uint32_t s_fly_frame_ms;
 static void menu_flight_hide(uint32_t arg, uint32_t vp)
 {
-    static struct { uint32_t arg; float y; uint32_t t; } seen[128];
-    uint32_t now = (uint32_t)SDL_GetTicks(), h, b;
-    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f;
-    int j, k, hide = 0;
+    uint32_t now = (uint32_t)SDL_GetTicks(), b;
+    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy;
+    int j, i, any = 0, near = 0, prev;
+    if (now - s_opt_seen_ms > 200u)
+        return;
     for (j = 0; j < 4; j++) {
         float x = orta_qx(vp + (uint32_t)j * 0x20u), y = orta_qx(vp + (uint32_t)j * 0x20u + 4u);
         if (x < x0) x0 = x;
@@ -1911,25 +1957,35 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
         if (y < y0) y0 = y;
         if (y > y1) y1 = y;
     }
-    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f) || !(x0 > -2000.0f && x1 < 2000.0f))
+    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f) || !(x0 > -2000.0f && x1 < 2000.0f && y0 > -2000.0f && y1 < 2000.0f))
         return;
-    /* one sprite record draws many sparkles (the groove glints share theirs - keyed by the record alone, every
-     * glint but one hid: 2026-11-19 video): record + an 8 px column. The flight is straight up or down; a glint
-     * that creeps into the next column starts a new entry */
-    arg ^= ((uint32_t)(int)(0.5f * (x0 + x1) / 8.0f) + 1000u) * 0x9E3779B1u;
-    h = (arg >> 3) * 2654435761u >> 25;
-    for (k = 0; k < 4; k++) {                        /* open addressing, 4 tries */
-        int i = (int)((h + (uint32_t)k) & 127u);
-        if (seen[i].arg == arg || seen[i].arg == 0 || now - seen[i].t > 1000u) {
-            if (seen[i].arg == arg && now - seen[i].t <= 100u && fabsf(y0 - seen[i].y) > 45.0f)
-                hide = 1;
-            seen[i].arg = arg;
-            seen[i].y = y0;
-            seen[i].t = now;
-            break;
-        }
+    /* a new frame: the game thread emits a frame's sprites within a few ms; 8 ms of quiet starts the next list */
+    if (now - s_fly_frame_ms > 8u) {
+        s_fly_cur ^= 1;
+        s_fly_n[s_fly_cur] = 0;
+        if (now - s_fly_frame_ms > 100u)
+            s_fly_n[s_fly_cur ^ 1] = 0;                /* a gap: nothing to compare with */
     }
-    if (hide) {
+    s_fly_frame_ms = now;
+    cx = 0.5f * (x0 + x1);
+    cy = 0.5f * (y0 + y1);
+    prev = s_fly_cur ^ 1;
+    for (i = 0; i < s_fly_n[prev]; i++) {
+        float dx, dy;
+        if (s_fly[prev][i].arg != arg)
+            continue;
+        any = 1;
+        dx = fabsf(s_fly[prev][i].x - cx);
+        dy = fabsf(s_fly[prev][i].y - cy);
+        if ((dx <= 20.0f && dy <= 20.0f) || dy <= 2.0f) { near = 1; break; }
+    }
+    if (s_fly_n[s_fly_cur] < ORTA_FLY_N) {
+        i = s_fly_n[s_fly_cur]++;
+        s_fly[s_fly_cur][i].arg = arg;
+        s_fly[s_fly_cur][i].x = cx;
+        s_fly[s_fly_cur][i].y = cy;
+    }
+    if (any && !near) {
         memcpy(&b, &off, 4);
         for (j = 0; j < 4; j++)
             GUEST32(vp + (uint32_t)j * 0x20u) = b;
@@ -2802,6 +2858,7 @@ void sub_000AF580(RECOMP_PARAMS)
     uint32_t obj = g_ecx, bits = obj ? GUEST32(obj + 0x18) : 0, cur;
     uint32_t move = bits & (0x01000000u | 0x02000000u);
     int k;
+    s_opt_seen_ms = (uint32_t)SDL_GetTicks();
     if (!obj || !opt_views_on()) { sub_000AF580_gen(ctx, base); return; }
     {
         uint32_t d = opt_label_data();
@@ -2922,8 +2979,8 @@ void sub_000AF580(RECOMP_PARAMS)
                 opt_view_texts(s_opt_view);                   /* RENDER RESOLUTION lists the new aspect's sizes */
             else
                 opt_line_text((int)cur, buf);                 /* SetText on its instances at the next call */
-            fprintf(stderr, "[OPT] view %d line %u -> %s (stock handler %.1f ms, ours %.1f ms)\n", s_opt_view, cur, buf,
-                    (t1_ - t0_) / 1e6, (SDL_GetTicksNS() - t1_) / 1e6);
+            fprintf(stderr, "[OPT] view %d line %u -> %s (stock handler %.1f ms, ours %.1f ms) at %llu ms\n", s_opt_view,
+                    cur, buf, (t1_ - t0_) / 1e6, (SDL_GetTicksNS() - t1_) / 1e6, (unsigned long long)SDL_GetTicks());
         }
         GUEST32(obj + 0x18) = bits;
         return;
