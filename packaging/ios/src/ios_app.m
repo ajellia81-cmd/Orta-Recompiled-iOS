@@ -103,9 +103,11 @@ static void overlay_when_window(void)
 }
 
 /* ── the display's refresh for FRAME PACING Display (toolkit host_vblank.c, iOS branch) ──────────────────────
- * A CADisplayLink on a thread of its own (its own run loop: the main thread's may be busy) asks for 120 Hz - the app
- * may use it (Info.plist CADisableMinimumFrameDurationOnPhone) - and counts refreshes; the toolkit's pacing thread
- * waits on the count. The guest's 60 Hz is then every 2nd refresh and each frame stays exactly two refreshes. */
+ * A CADisplayLink on a thread of its own (its own run loop: the main thread's may be busy) holds the display at
+ * 60 Hz and counts refreshes; the toolkit's pacing thread waits on the count, so the guest's vblank is the
+ * display's own. 60, not 120 (2026-11-19): at 120 Hz a frame went out at whichever refresh came after the GPU
+ * was done - one frame stayed 1 refresh, the next 3 (the GPU's time hovers around 8.3 ms), a judder that stayed
+ * after the DPC fix. At 60 Hz every frame meets the next refresh and stays exactly one. */
 @interface OrtaVBlank : NSObject
 - (void)tick:(CADisplayLink *)l;
 @end
@@ -132,9 +134,9 @@ static void *vblank_thread(void *u)
         OrtaVBlank *t = [OrtaVBlank new];
         CADisplayLink *l = [CADisplayLink displayLinkWithTarget:t selector:@selector(tick:)];
         if (@available(iOS 15.0, *))
-            l.preferredFrameRateRange = CAFrameRateRangeMake(120, 120, 120);
+            l.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);
         [l addToRunLoop:NSRunLoop.currentRunLoop forMode:NSRunLoopCommonModes];
-        fprintf(stderr, "[IOS] display link: up to %ld Hz\n", (long)UIScreen.mainScreen.maximumFramesPerSecond);
+        fprintf(stderr, "[IOS] display link: 60 Hz (the screen can do %ld)\n", (long)UIScreen.mainScreen.maximumFramesPerSecond);
         for (;;)
             [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:NSDate.distantFuture];
     }
