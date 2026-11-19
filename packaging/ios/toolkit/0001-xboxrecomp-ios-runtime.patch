@@ -192,7 +192,7 @@ index 8bb17ea..fa90c7c 100644
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index ec863b3..b003d97 100644
+index ec863b3..247f1cd 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -74,6 +74,14 @@
@@ -336,7 +336,493 @@ index ec863b3..b003d97 100644
      memset(&in, 0, sizeof in);
      in.language = GLSLANG_SOURCE_GLSL;
      in.stage = j->stage;
-@@ -3756,15 +3866,19 @@ static int sc_extent_changed(void)
+@@ -2969,6 +3079,7 @@ static int cache_path(char *out, size_t cap, const char *name)
+ typedef struct { uint64_t hash; uint32_t stage, nwords; uint32_t *words; } SpvEnt;
+ static SpvEnt *s_spv;
+ static uint32_t s_nspv, s_spv_cap, s_spv_hits;
++static SDL_Mutex *s_spv_mx;                     /* async compiles (below): made before the first worker */
+ 
+ static uint64_t text_hash(const char *t, uint32_t stage)
+ {
+@@ -3063,15 +3174,19 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
+     VkShaderModule m = VK_NULL_HANDLE;
+ 
+     uint64_t hash = text_hash(src, (uint32_t)stage);
+-    const SpvEnt *hit = spv_find(hash, (uint32_t)stage);
++    const SpvEnt *hit;
+ 
++    SDL_LockMutex(s_spv_mx);                  /* the async workers compile too (NULL before they start: no-op) */
++    hit = spv_find(hash, (uint32_t)stage);
+     if (hit) {
+         s_spv_hits++;
+         ci.codeSize = (size_t)hit->nwords * 4;
+         ci.pCode = hit->words;
+         vkCreateShaderModule(s_dev, &ci, NULL, &m);
++        SDL_UnlockMutex(s_spv_mx);
+         return m;
+     }
++    SDL_UnlockMutex(s_spv_mx);
+     VT("compile %s (%u bytes of GLSL)\n", stage == GLSLANG_STAGE_VERTEX ? "vs" : "fs",
+        (unsigned)strlen(src));
+ #if defined(__SWITCH__)
+@@ -3102,8 +3217,12 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
+     ci.pCode = j.words;
+     VT("  SPIR-V %u words -> vkCreateShaderModule\n", (unsigned)j.nwords);
+     vkCreateShaderModule(s_dev, &ci, NULL, &m);
+-    spv_add(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
+-    spv_append(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
++    SDL_LockMutex(s_spv_mx);
++    if (!spv_find(hash, (uint32_t)stage)) {
++        spv_add(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
++        spv_append(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
++    }
++    SDL_UnlockMutex(s_spv_mx);
+     free(j.words);
+     return m;
+ }
+@@ -3241,6 +3360,28 @@ static void prog_rec_batch(const ProgRec *rec, Nv2aRawBatch *bb, uint32_t n)
+     bb->vp_prog_gen = 0x80000000u + n;          /* hash it: not an executor version */
+ }
+ 
++/* a program's GLSL (vertex + fragment) into vsrc / fsrc; < 0: not translatable */
++static int prog_src(const Nv2aRawBatch *b, uint64_t vkey, const Nv2aPshKey *pk, char *vsrc, size_t vcap, char *fsrc,
++                    size_t fcap)
++{
++    size_t n = (size_t)snprintf(vsrc, vcap, "%s", nv2a_gl_vsh_prelude());
++    if (vkey) {
++        int k = nv2a_gl_vsh_program(b->vp_program, b->vp_slots, b->vp_start, vsrc + n, vcap - n);
++        if (k < 0)
++            return -1;
++        n += (size_t)k;
++        snprintf(vsrc + n, vcap - n, "%s", nv2a_gl_vsh_main_program());
++    } else {
++        snprintf(vsrc + n, vcap - n, "%s", nv2a_gl_vsh_fixed());
++    }
++    return nv2a_gl_psh(pk, fsrc, fcap) < 0 ? -1 : 0;
++}
++
++static int async_on(void);
++static int aprog_take(const Nv2aRawBatch *b, uint64_t vkey, const Nv2aPshKey *pk, VkShaderModule *vs,
++                      VkShaderModule *fs);
++static void async_prog_evict(int prog);
++
+ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+ {
+     static uint32_t last_gen;
+@@ -3250,8 +3391,8 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+     uint64_t vkey = 0;
+     uint32_t bucket;
+     VkProg *p, *victim = NULL;
++    VkShaderModule avs = VK_NULL_HANDLE, afs = VK_NULL_HANDLE;
+     int i;
+-    size_t n;
+ 
+     if (b->xform == 2) {
+         if (b->vp_prog_gen != last_gen || !last_vkey) {
+@@ -3273,6 +3414,12 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+             return c;
+         }
+     }
++    if (async_on()) {
++        /* not built yet: a worker compiles it, the draws wait (skipped) until it is there - no frame stalls */
++        int r = aprog_take(b, vkey, pk, &avs, &afs);
++        if (r == 0)
++            return NULL;
++    }
+     for (i = 0; i < VK_MAX_PROG; i++) {
+         VkProg *c = &s_prog[i];
+         if (!c->vs) { if (!victim || victim->vs) victim = c; }
+@@ -3286,6 +3433,7 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+             if (*at == me) { *at = p->next; break; }
+             at = &s_prog[*at - 1].next;
+         }
++        async_prog_evict((int)(p - s_prog));
+         pipes_forget_prog((int)(p - s_prog));
+         vkDestroyShaderModule(s_dev, p->vs, NULL);
+         vkDestroyShaderModule(s_dev, p->fs, NULL);
+@@ -3293,20 +3441,15 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
+     }
+     memset(p, 0, sizeof *p);
+ 
+-    n = (size_t)snprintf(vsrc, sizeof vsrc, "%s", nv2a_gl_vsh_prelude());
+-    if (vkey) {
+-        int k = nv2a_gl_vsh_program(b->vp_program, b->vp_slots, b->vp_start, vsrc + n, sizeof vsrc - n);
+-        if (k < 0)
+-            return NULL;
+-        n += (size_t)k;
+-        snprintf(vsrc + n, sizeof vsrc - n, "%s", nv2a_gl_vsh_main_program());
++    if (avs && afs) {
++        p->vs = avs;                          /* the worker's */
++        p->fs = afs;
+     } else {
+-        snprintf(vsrc + n, sizeof vsrc - n, "%s", nv2a_gl_vsh_fixed());
++        if (prog_src(b, vkey, pk, vsrc, sizeof vsrc, fsrc, sizeof fsrc) < 0)
++            return NULL;
++        p->vs = compile(GLSLANG_STAGE_VERTEX, vsrc);
++        p->fs = compile(GLSLANG_STAGE_FRAGMENT, fsrc);
+     }
+-    if (nv2a_gl_psh(pk, fsrc, sizeof fsrc) < 0)
+-        return NULL;
+-    p->vs = compile(GLSLANG_STAGE_VERTEX, vsrc);
+-    p->fs = compile(GLSLANG_STAGE_FRAGMENT, fsrc);
+     if (!p->vs || !p->fs) {
+         if (p->vs) vkDestroyShaderModule(s_dev, p->vs, NULL);
+         if (p->fs) vkDestroyShaderModule(s_dev, p->fs, NULL);
+@@ -3440,12 +3583,9 @@ static void pipe_rec_append(const PipeKey *k)
+     }
+ }
+ 
+-static VkPipeline pipe_get(const PipeKey *k)
++static VkPipeline pipe_create(const PipeKey *k, VkShaderModule vsm, VkShaderModule fsm, int stats)
+ {
+-    const uint32_t *w = (const uint32_t *)k;
+-    uint32_t h = 2166136261u, i;
+-    int e;
+-    PipeEnt *pe;
++    uint32_t i;
+     VkGraphicsPipelineCreateInfo ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+     VkPipelineShaderStageCreateInfo st[2];
+     VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+@@ -3484,23 +3624,14 @@ static VkPipeline pipe_get(const PipeKey *k)
+     VkVertexInputBindingDescription vb[NV2A_RAW_ATTRS];
+     VkVertexInputAttributeDescription va[NV2A_RAW_ATTRS];
+     VkPipeline pipe = VK_NULL_HANDLE;
+-    VkProg *p = &s_prog[k->prog];
+-    size_t kb = PIPE_KEY_BYTES;
+-
+-    for (i = 0; i < kb / 4; i++)
+-        h = (h ^ w[i]) * 16777619u;
+-    h &= PIPE_BUCKETS - 1;
+-    for (e = s_pipe_head[h]; e; e = s_pipes[e - 1].next)
+-        if (s_pipes[e - 1].pipe && !memcmp(&s_pipes[e - 1].key, k, kb))
+-            return s_pipes[e - 1].pipe;
+ 
+     memset(st, 0, sizeof st);
+     st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+-    st[0].module = p->vs;
++    st[0].module = vsm;
+     st[0].pName = "main";
+     st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+-    st[1].module = p->fs;
++    st[1].module = fsm;
+     st[1].pName = "main";
+     ia.topology = k->topo == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+                 : k->topo == 1 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+@@ -3565,13 +3696,32 @@ static VkPipeline pipe_get(const PipeKey *k)
+     {
+         uint64_t t0 = hz_now();
+         VkResult pr = vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &pipe);
+-        s_hz_pipes++;
+-        s_hz_pipe_ns += hz_now() - t0;
++        if (stats) {
++            s_hz_pipes++;
++            s_hz_pipe_ns += hz_now() - t0;
++        }
+         if (pr != VK_SUCCESS) {
+             LOGE("pipeline creation failed\n");
+             return VK_NULL_HANDLE;
+         }
+     }
++    return pipe;
++}
++
++static uint32_t pipe_hash(const PipeKey *k)
++{
++    const uint32_t *w = (const uint32_t *)k;
++    uint32_t h = 2166136261u, i;
++    for (i = 0; i < PIPE_KEY_BYTES / 4; i++)
++        h = (h ^ w[i]) * 16777619u;
++    return h & (PIPE_BUCKETS - 1);
++}
++
++/* a made pipeline into the table (and the record file) */
++static VkPipeline pipe_insert(const PipeKey *k, VkPipeline pipe)
++{
++    PipeEnt *pe;
++    uint32_t h = pipe_hash(k);
+     if (s_npipes == VK_MAX_PIPE) {
+         LOGE("pipeline table full\n");
+         return pipe;                          /* leaks; never seen in practice */
+@@ -3587,6 +3737,277 @@ static VkPipeline pipe_get(const PipeKey *k)
+     return pipe;
+ }
+ 
++static int apipe_take(const PipeKey *k, VkPipeline *out);
++
++static VkPipeline pipe_get(const PipeKey *k)
++{
++    uint32_t h = pipe_hash(k);
++    int e;
++    VkPipeline pipe;
++    for (e = s_pipe_head[h]; e; e = s_pipes[e - 1].next)
++        if (s_pipes[e - 1].pipe && !memcmp(&s_pipes[e - 1].key, k, PIPE_KEY_BYTES))
++            return s_pipes[e - 1].pipe;
++    if (async_on()) {
++        int r = apipe_take(k, &pipe);
++        if (r == 0)
++            return VK_NULL_HANDLE;            /* a worker builds it; the draw waits */
++        if (r == 1)
++            return pipe_insert(k, pipe);
++    }
++    pipe = pipe_create(k, s_prog[k->prog].vs, s_prog[k->prog].fs, 1);
++    return pipe ? pipe_insert(k, pipe) : VK_NULL_HANDLE;
++}
++
++/* ── Asynchronous shader / pipeline builds (2026-11-19, the iOS port: "no stutter the first time a scene is
++ * played") ───────────────────────────────────────────────────────────────────────────────────────────────────────
++ * A program or pipeline the title needs for the first time is built on a worker thread (glslang + MoltenVK's
++ * Metal compile: up to 0.8 s on the A20 Pro) and the draws that need it are skipped until it is there - a few
++ * frames without that object instead of a frame that stands still (the way emulators do it). The boot prewarm
++ * (progcache / vkpipes, seeded from the app on iOS) stays synchronous, so known scenes lose nothing.
++ * RECOMP_VK_ASYNC=0|1; on by default on iOS, off elsewhere (the original behaviour). */
++#define AJ_MAX 128
++#define AJ_WORKERS 2
++typedef struct {
++    int state;                                /* 0 free, 1 queued, 2 running, 3 done, 4 failed */
++    int kind;                                 /* 0 program, 1 pipeline */
++    uint32_t born;                            /* s_frame when queued (also the queue order) */
++    uint64_t vkey;
++    Nv2aPshKey pk;
++    char *vsrc, *fsrc;
++    VkShaderModule vs, fs;                    /* program: the result; pipeline: its stages */
++    PipeKey key;
++    VkPipeline pipe;
++} AJob;
++static AJob s_aj[AJ_MAX];
++static SDL_Mutex *s_aj_mx;
++static SDL_Condition *s_aj_cv, *s_aj_idle;
++static int s_aj_busy;                         /* queued + running */
++static int s_async = -1;
++static uint32_t s_aj_queued, s_aj_skipped;
++
++static int SDLCALL aj_worker(void *unused)
++{
++    (void)unused;
++#if defined(XR_VK_IOS)
++    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);   /* below the game's threads, above background */
++#endif
++    for (;;) {
++        AJob *j = NULL;
++        int i;
++        SDL_LockMutex(s_aj_mx);
++        for (;;) {
++            for (i = 0; i < AJ_MAX; i++)
++                if (s_aj[i].state == 1 && (!j || (int32_t)(s_aj[i].born - j->born) < 0))
++                    j = &s_aj[i];
++            if (j)
++                break;
++            SDL_WaitCondition(s_aj_cv, s_aj_mx);
++        }
++        j->state = 2;
++        SDL_UnlockMutex(s_aj_mx);
++        if (j->kind == 0) {
++            VkShaderModule vs = compile(GLSLANG_STAGE_VERTEX, j->vsrc);
++            VkShaderModule fs = vs ? compile(GLSLANG_STAGE_FRAGMENT, j->fsrc) : VK_NULL_HANDLE;
++            if (!fs && vs) {
++                vkDestroyShaderModule(s_dev, vs, NULL);
++                vs = VK_NULL_HANDLE;
++            }
++            free(j->vsrc);
++            free(j->fsrc);
++            j->vsrc = j->fsrc = NULL;
++            j->vs = vs;
++            j->fs = fs;
++        } else {
++            j->pipe = pipe_create(&j->key, j->vs, j->fs, 0);
++        }
++        SDL_LockMutex(s_aj_mx);
++        j->state = (j->kind == 0 ? j->vs != VK_NULL_HANDLE : j->pipe != VK_NULL_HANDLE) ? 3 : 4;
++        if (--s_aj_busy == 0)
++            SDL_BroadcastCondition(s_aj_idle);
++        SDL_UnlockMutex(s_aj_mx);
++    }
++    return 0;
++}
++
++static int async_on(void)
++{
++    if (s_async < 0) {
++        const char *e = getenv("RECOMP_VK_ASYNC");
++#if defined(XR_VK_IOS)
++        s_async = !(e && e[0] == '0');
++#else
++        s_async = e && e[0] == '1';
++#endif
++        if (s_async) {
++            int i, n = 0;
++            s_spv_mx = SDL_CreateMutex();
++            s_aj_mx = SDL_CreateMutex();
++            s_aj_cv = SDL_CreateCondition();
++            s_aj_idle = SDL_CreateCondition();
++            for (i = 0; s_spv_mx && s_aj_mx && s_aj_cv && s_aj_idle && i < AJ_WORKERS; i++) {
++                SDL_PropertiesID tp = SDL_CreateProperties();
++                SDL_Thread *t;
++                SDL_SetPointerProperty(tp, SDL_PROP_THREAD_CREATE_ENTRY_FUNCTION_POINTER, (void *)aj_worker);
++                SDL_SetStringProperty(tp, SDL_PROP_THREAD_CREATE_NAME_STRING, "vk async compile");
++                SDL_SetNumberProperty(tp, SDL_PROP_THREAD_CREATE_STACKSIZE_NUMBER, 8u << 20);
++                t = SDL_CreateThreadWithProperties(tp);
++                SDL_DestroyProperties(tp);
++                if (t) {
++                    SDL_DetachThread(t);
++                    n++;
++                }
++            }
++            if (!n)
++                s_async = 0;
++            LOGE("[VK] async compile: %s (%d workers; new shaders / pipelines are built beside the frame, their draws "
++                 "wait; RECOMP_VK_ASYNC=0: in the frame)\n", n ? "on" : "off - no worker thread", n);
++        }
++    }
++    return s_async > 0 && !s_prewarming;
++}
++
++/* a free job slot (render thread, s_aj_mx held); done jobs nobody asked for again are given up after 10 s */
++static AJob *aj_slot(void)
++{
++    int i;
++    for (i = 0; i < AJ_MAX; i++)
++        if (s_aj[i].state == 0)
++            return &s_aj[i];
++    for (i = 0; i < AJ_MAX; i++) {
++        AJob *j = &s_aj[i];
++        if (j->state == 3 && j->kind == 1) {
++            pipe_insert(&j->key, j->pipe);    /* a pipeline is kept: the table takes it */
++            j->state = 0;
++            return j;
++        }
++    }
++    for (i = 0; i < AJ_MAX; i++) {
++        AJob *j = &s_aj[i];
++        if ((j->state == 3 || j->state == 4) && j->kind == 0 && s_frame - j->born > 600) {
++            if (j->vs) vkDestroyShaderModule(s_dev, j->vs, NULL);
++            if (j->fs) vkDestroyShaderModule(s_dev, j->fs, NULL);
++            j->state = 0;
++            return j;
++        }
++    }
++    return NULL;
++}
++
++static void aj_queue(AJob *j)
++{
++    j->born = s_frame;
++    j->state = 1;
++    s_aj_busy++;
++    s_aj_queued++;
++    if ((s_aj_queued % 200) == 1)
++        LOGE("[VK] async compile: %u builds queued so far, %u draws waited\n", s_aj_queued, s_aj_skipped);
++    SDL_SignalCondition(s_aj_cv);
++}
++
++/* 1: the program's modules in vs / fs; 0: being built (skip the draw); 2: build it here */
++static int aprog_take(const Nv2aRawBatch *b, uint64_t vkey, const Nv2aPshKey *pk, VkShaderModule *vs,
++                      VkShaderModule *fs)
++{
++    static char vsrc[320 * 1024], fsrc[64 * 1024];
++    AJob *j;
++    int i;
++    SDL_LockMutex(s_aj_mx);
++    for (i = 0; i < AJ_MAX; i++) {
++        j = &s_aj[i];
++        if (j->state && j->kind == 0 && j->vkey == vkey && !memcmp(&j->pk, pk, sizeof *pk)) {
++            int st = j->state;
++            if (st == 3) {
++                *vs = j->vs;
++                *fs = j->fs;
++            }
++            if (st >= 3)
++                j->state = 0;
++            SDL_UnlockMutex(s_aj_mx);
++            if (st < 3)
++                s_aj_skipped++;
++            return st == 3 ? 1 : st == 4 ? 2 : 0;
++        }
++    }
++    j = aj_slot();
++    SDL_UnlockMutex(s_aj_mx);
++    if (!j || prog_src(b, vkey, pk, vsrc, sizeof vsrc, fsrc, sizeof fsrc) < 0)
++        return 2;
++    memset(j, 0, sizeof *j);
++    j->kind = 0;
++    j->vkey = vkey;
++    j->pk = *pk;
++    j->vsrc = strdup(vsrc);
++    j->fsrc = strdup(fsrc);
++    if (!j->vsrc || !j->fsrc) {
++        free(j->vsrc);
++        free(j->fsrc);
++        j->vsrc = j->fsrc = NULL;
++        return 2;
++    }
++    SDL_LockMutex(s_aj_mx);
++    aj_queue(j);
++    SDL_UnlockMutex(s_aj_mx);
++    s_aj_skipped++;
++    return 0;
++}
++
++/* 1: the pipeline in out; 0: being built (skip the draw); 2: build it here */
++static int apipe_take(const PipeKey *k, VkPipeline *out)
++{
++    AJob *j;
++    int i;
++    SDL_LockMutex(s_aj_mx);
++    for (i = 0; i < AJ_MAX; i++) {
++        j = &s_aj[i];
++        if (j->state && j->kind == 1 && !memcmp(&j->key, k, PIPE_KEY_BYTES)) {
++            int st = j->state;
++            if (st == 3)
++                *out = j->pipe;
++            if (st >= 3)
++                j->state = 0;
++            SDL_UnlockMutex(s_aj_mx);
++            if (st < 3)
++                s_aj_skipped++;
++            return st == 3 ? 1 : st == 4 ? 2 : 0;
++        }
++    }
++    j = aj_slot();
++    if (!j) {
++        SDL_UnlockMutex(s_aj_mx);
++        return 2;
++    }
++    memset(j, 0, sizeof *j);
++    j->kind = 1;
++    j->key = *k;
++    j->vs = s_prog[k->prog].vs;
++    j->fs = s_prog[k->prog].fs;
++    aj_queue(j);
++    SDL_UnlockMutex(s_aj_mx);
++    s_aj_skipped++;
++    return 0;
++}
++
++/* A program slot is reused (1024 live programs - rare): no worker may still build a pipeline from its modules, and
++ * finished pipelines of it are dropped (their key names the slot, which is about to mean another program). */
++static void async_prog_evict(int prog)
++{
++    int i;
++    if (s_async <= 0)
++        return;
++    SDL_LockMutex(s_aj_mx);
++    while (s_aj_busy)
++        SDL_WaitCondition(s_aj_idle, s_aj_mx);
++    for (i = 0; i < AJ_MAX; i++) {
++        AJob *j = &s_aj[i];
++        if (j->state >= 3 && j->kind == 1 && j->key.prog == prog) {
++            if (j->pipe)
++                garbage_add_pipe(j->pipe);
++            j->state = 0;
++        }
++    }
++    SDL_UnlockMutex(s_aj_mx);
++}
++
+ static VkProg *prog_find(uint64_t vkey, const Nv2aPshKey *pk)
+ {
+     int i;
+@@ -3756,15 +4177,19 @@ static int sc_extent_changed(void)
      sc_choose(&caps, &e, &pre);
      return e.width != 0xFFFFFFFFu && (e.width != s_sc_extent.width || e.height != s_sc_extent.height);
  }
@@ -357,7 +843,7 @@ index ec863b3..b003d97 100644
      }
      return true;
  }
-@@ -3814,6 +3928,19 @@ static int surface_recreate(void)
+@@ -3814,6 +4239,19 @@ static int surface_recreate(void)
  static int sc_ready(void)
  {
      static unsigned retry;
@@ -377,7 +863,7 @@ index ec863b3..b003d97 100644
      if (SDL_GetAtomicInt(&s_sc_background))
          return 0;
      if (!SDL_GetAtomicInt(&s_sc_lost) && s_swapchain)
-@@ -4184,7 +4311,7 @@ static int ready(void)
+@@ -4184,7 +4622,7 @@ static int ready(void)
      VkPhysicalDeviceExtendedDynamicStateFeaturesEXT feds =
          { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT };
      VkPhysicalDeviceFeatures have;
@@ -386,7 +872,7 @@ index ec863b3..b003d97 100644
      uint32_t ndext = 0;
      const char *layers[1];
      uint32_t nlayers = 0;
-@@ -4444,7 +4571,7 @@ static int ready(void)
+@@ -4444,7 +4882,7 @@ static int ready(void)
          snprintf(w, sizeof w, "The window's Vulkan surface could not be created (SDL: %s).", SDL_GetError());
          vk_fatal(w);
      }
@@ -395,7 +881,7 @@ index ec863b3..b003d97 100644
      if (!s_headless)
          SDL_AddEventWatch(sc_event_watch, NULL);    /* background / foreground: the surface's life */
  #endif
-@@ -4480,6 +4607,13 @@ static int ready(void)
+@@ -4480,6 +4918,13 @@ static int ready(void)
                      s_have_budget = 1;
                      break;
                  }

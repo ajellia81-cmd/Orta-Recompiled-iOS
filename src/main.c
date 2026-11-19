@@ -138,6 +138,18 @@ int main(int argc, char **argv)
         settings_set("aspect_ratio", r >= 1.70 ? "21:9" : r >= 1.55 ? "16:10" : "4:3");
         printf("[IOS] display ratio %.3f: first-start aspect %s\n", r, settings_get("aspect_ratio", "?"));
     }
+    /* SCREEN (21:9) is the display's ratio from the very start: the toolkit fits it only when the window opens, but
+     * Orta sets its renderer up before that (sub_0003D340, once) - it took 64:27 = 2.37 there, the camera later
+     * 2.17, and the picture it drew was a 2.37 one fitted into the 2.17 screen: bars above and below in play
+     * (2026-11-19). RECOMP_DISPLAY_RATIO is read at the first xbox_video_aspect() call (toolkit kernel_xbox.c). */
+    {
+        const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+        if (dm && dm->w > 0 && dm->h > 0) {
+            char v[48];
+            snprintf(v, sizeof v, "%dx%d", dm->w > dm->h ? dm->w : dm->h, dm->w > dm->h ? dm->h : dm->w);
+            host_setenv_default("RECOMP_DISPLAY_RATIO", v);
+        }
+    }
     /* and the 3D at the screen's own resolution, 1:1 to its pixels (RENDER RESOLUTION lists the screen's height in
      * place of the nearest step, recomp_manual.c) */
     if (!settings_get("render_scale_wide", NULL) && orta_ios_native_lines() > 480) {
