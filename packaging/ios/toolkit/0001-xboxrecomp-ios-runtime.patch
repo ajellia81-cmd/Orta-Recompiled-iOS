@@ -379,7 +379,7 @@ index 8bb17ea..961c541 100644
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index ec863b3..2ac172d 100644
+index ec863b3..4f4d0b3 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -74,6 +74,14 @@
@@ -1097,7 +1097,38 @@ index ec863b3..2ac172d 100644
      }
      dci.pNext = &f2;
      dci.queueCreateInfoCount = 1;
-@@ -8719,6 +9172,21 @@ static void vk_flip(void)
+@@ -4950,6 +5403,7 @@ static uint32_t zmax_of(const uint32_t *r)
+ /* NV097 primitive -> Vulkan topology and (possibly rewritten) indices. */
+ static uint32_t *s_prim_idx;
+ static size_t    s_prim_cap;
++static uint32_t  s_line_draws, s_line_verts, s_line_xform2;   /* diagnostics: line draws since the last [fps] */
+ 
+ static int prim_indices(const Nv2aRawBatch *b, const uint32_t **idx, uint32_t *n,
+                         VkPrimitiveTopology *topo, uint32_t *cls)
+@@ -6012,6 +6466,11 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
+     }
+     if (!prim_indices(b, &idx, &n, &topo, &cls) || !n)
+         return;
++    if (cls == 1) {                       /* lines: drawn 1 host pixel wide (the [fps] line counts them) */
++        s_line_draws++;
++        s_line_verts += n;
++        s_line_xform2 += b->xform == 2;
++    }
+     VT("draw: prim %u idx %u verts %u attrs %04X direct %04X xform %u surf %08X zeta %08X\n", b->prim, n,
+        b->vertex_count, b->attr_present, b->attr_direct, b->xform, b->surface.color_va, b->zeta_va);
+     s = target(&b->surface, b->zeta_va, &d);
+@@ -8414,6 +8873,10 @@ static void vk_flip(void)
+                 extern void xbox_vblank_report(double, char *, size_t);
+                 char vb[128], ft[256];
+                 fresh = 0;
++                if (s_line_draws)
++                    fprintf(stderr, "[fps] lines: %u draws, %u vertices (%u screen-space) - 1 host pixel wide\n",
++                            s_line_draws, s_line_verts, s_line_xform2);
++                s_line_draws = s_line_verts = s_line_xform2 = 0;
+                 memset(hist, 0, sizeof hist);
+                 n_int = 0;
+                 prev = 0;
+@@ -8719,6 +9182,21 @@ static void vk_flip(void)
                      cmx = s_crop_mx;
                      cmy = s_crop_my;
                  }
