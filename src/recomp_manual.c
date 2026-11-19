@@ -1135,6 +1135,11 @@ int  nv2a_vk_antialiasing_fits(int mode);
 void nv2a_vk_set_bloom(int strength);      /* toolkit: 0 = off, 1 .. NV2A_VK_BLOOM_MAX (10) */
 
 typedef struct { const char *label, *key, *def; const char *val[12], *txt[12]; int n; } opt_val_t;
+#if defined(ORTA_IOS_SCREEN)
+#define ORTA_LANG_HELP "Game language. SYSTEM follows the iPhone.\nLeft or right to change, Y for the default.\nNeeds a restart."
+#else
+#define ORTA_LANG_HELP "Game language. SYSTEM follows Windows.\nLeft or right to change, Y for the default.\nNeeds a restart."
+#endif
 enum { RV_DISPLAY, RV_RENDER, RV_ASPECT, RV_ANISO, RV_LANGUAGE, RV_AA, RV_FRAMERATE, RV_VSYNC, RV_FPSHUD, RV_BOOT,
        RV_PACING, RV_FOV, RV_SPEAKERS, RV_BLOOM, RV_BLOOMSTR, RV_N };
 static const opt_val_t k_rv[RV_N] = {
@@ -2634,7 +2639,7 @@ static const char *opt_help_for(int view, uint32_t line)
         "Aspect ratio and field of view.\nPress A to open.",
         NULL, NULL,                                 /* lines 4 / 5 hidden (in POST PROCESSING) */
         "Frame rate, VSync and FPS counter.\nPress A to open.",
-        "Game language. SYSTEM follows Windows.\nLeft or right to change, Y for the default.\nNeeds a restart.",
+        ORTA_LANG_HELP,
         "Boot animation from media\\boot.mpg.\nPress A to open.",
     };
     static const char *const k_fps[4] = {
