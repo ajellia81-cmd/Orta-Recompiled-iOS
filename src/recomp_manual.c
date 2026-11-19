@@ -1847,12 +1847,27 @@ void sub_00069A90(RECOMP_PARAMS)
 }
 
 extern void sub_0006A520_gen(RECOMP_PARAMS);
+static uint32_t s_hud_batch;                       /* batches drawn so far (the log tells neighbours apart) */
+static int hud_log_on(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("ORTA_HUD_LOG");
+#if defined(ORTA_IOS_SCREEN)
+        on = !(e && *e == '0');
+#else
+        on = e && *e == '1';
+#endif
+    }
+    return on;
+}
 void sub_0006A520(RECOMP_PARAMS)
 {
     float f = orta_aspect_factor();
     int n = s_hud_n, i, j;
     uint32_t lo = GUEST32(0x46F894u), hi = GUEST32(0x46F890u);
     s_hud_n = 0;
+    s_hud_batch++;
     if (f > 0.0f && n > 0) {
         static float bx0[ORTA_HUD_MAXQ], bx1[ORTA_HUD_MAXQ];
         static uint32_t bq[ORTA_HUD_MAXQ];
@@ -1928,6 +1943,26 @@ void sub_0006A520(RECOMP_PARAMS)
                     if (now - keep[w].t <= 100u && gx0[g] < keep[w].x1 + gap && gx1[g] > keep[w].x0 - gap
                         && gy0[g] < keep[w].y1 && gy1[g] > keep[w].y0)
                         d = 0.0f;
+                if (gd[g] != 0.0f && hud_log_on()) {
+                    /* ORTA_HUD_LOG (on in the iOS build for now, 2026-11-19): every side group, once per place, so a
+                     * walk through the menus lists what the anchoring moves - 16:9 layout px, rows in frame px */
+                    static uint32_t seen[512];
+                    static int nseen, nlines;
+                    uint32_t key = ((uint32_t)(gx0[g] * 0.25f) & 0xFFu) | (((uint32_t)(gx1[g] * 0.25f) & 0xFFu) << 8)
+                                   | (((uint32_t)(gy0[g] * 0.25f) & 0xFFu) << 16) | ((uint32_t)(gi[g + 1] - gi[g]) << 24)
+                                   | (d != 0.0f ? 0x80000000u : 0u);
+                    int q, dup = 0;
+                    for (q = 0; q < nseen; q++)
+                        if (seen[q] == key) { dup = 1; break; }
+                    if (!dup && nlines < 400) {
+                        if (nseen < 512) seen[nseen++] = key;
+                        nlines++;
+                        fprintf(stderr, "[HUD] %s x %.0f..%.0f (16:9 %.0f..%.0f) rows %.0f..%.0f, %d quad(s), batch %u\n",
+                                d != 0.0f ? (d < 0.0f ? "to the left " : "to the right") : "kept (touches a staying group)",
+                                gx0[g], gx1[g], 320.0f + (gx0[g] - 320.0f) * s16, 320.0f + (gx1[g] - 320.0f) * s16,
+                                gy0[g], gy1[g], gi[g + 1] - gi[g], s_hud_batch);
+                    }
+                }
                 if (d != 0.0f) {
                     int t, v;
                     for (t = gi[g]; t < gi[g + 1]; t++)
