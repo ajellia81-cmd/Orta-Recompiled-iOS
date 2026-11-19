@@ -1929,29 +1929,30 @@ static void hud_snap_quad(uint32_t vp)
         GUEST32(vp + (uint32_t)j * 0x20u + 4u) = by;
     }
 }
-/* Options: the views park the lines they do not show far below the screen (row 40 + line, y ~1250) and move the
- * view's lines to their rows; the game slides the pieces there, so right after a view is laid out its label
- * pieces fly up from below the screen (and the parked ones down out of it) for some 20 frames at 70-100 rows a
- * frame (iPhone log b7d406c9 [FLY]; the Xbox original has nothing of the kind). Earlier rules ran all the time and
- * either let the flight through or hid the right side's glints now and then - seen as noise flickering (iPhone
- * 2026-11-20, build 3218e23: "one flight on entry, then noise appearing and disappearing"). Now only in the 700 ms
- * after a layout (opt_layout: the screen opened or a view changed): a sprite up to 64 x 40 is drawn only if its
- * record had a piece within 8 rows / 48 px of it in the frame before (a record not drawn then: its last place
- * within 100 ms, 45 rows). After that window nothing is touched - the glints run as the game draws them. */
+/* Options: the views park the lines they do not show far below the screen (row 40 + line, y ~1250 / 1846);
+ * sparkle particles of a parked piece fly from there up to the part of it still on screen (TOP: line 0's value
+ * box at row 0 - iPhone video 2026-11-19 19:05, a dot rising to the NORMAL box ~1 s after the screen opened; the
+ * Xbox original has no such flight). History: keyed by record (aedbebc) hid the flight but also the groove glints
+ * (they share one record, drawn many times a frame); by nearness (762eb56, 0ecae74) let the flight through; a
+ * 45-row jump of a record drawn once a frame (3218e23) hid it frame by frame - frames with a smaller jump showed,
+ * seen as flickering noise; that rule only in a 700 ms window (d9628a6) missed the flight, which comes later.
+ * Now: a record drawn once a frame that jumps more than 45 rows is FLYING and stays hidden, frame after frame,
+ * until it has moved at most 6 rows a frame three frames running (it landed). Records drawn more than once a frame
+ * (the glints) are never touched. Options screen only, sprites up to 16 x 16. */
 static uint32_t s_opt_seen_ms;                 /* sub_000AF580 (the options screen's handler) last ran */
-static uint32_t s_opt_layout_ms;               /* opt_layout last ran */
+static uint32_t s_opt_layout_ms;               /* opt_layout last ran (kept for the log) */
 #define ORTA_FLY_N 1024
 static struct { uint32_t arg; float x, y; } s_fly[2][ORTA_FLY_N];
 static int s_fly_n[2], s_fly_cur;
 static uint32_t s_fly_frame_ms;
 static void menu_flight_hide(uint32_t arg, uint32_t vp)
 {
-    static struct { uint32_t arg; float y; uint32_t t; } seen[256];
+    static struct { uint32_t arg; float y; uint32_t t; uint8_t flying, calm; } seen[256];
     static int s_fly_logged;
     uint32_t now = (uint32_t)SDL_GetTicks(), b, hh;
-    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy, best = 1e30f;
-    int j, i, k, any = 0, near = 0, prev;
-    if (now - s_opt_seen_ms > 200u || now - s_opt_layout_ms > 700u)
+    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy, dy = -1.0f;
+    int j, i, k, count = 0, prev, slot = -1, hide = 0;
+    if (now - s_opt_seen_ms > 200u)
         return;
     for (j = 0; j < 4; j++) {
         float x = orta_qx(vp + (uint32_t)j * 0x20u), y = orta_qx(vp + (uint32_t)j * 0x20u + 4u);
@@ -1960,7 +1961,7 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
         if (y < y0) y0 = y;
         if (y > y1) y1 = y;
     }
-    if (!(x1 - x0 <= 64.0f && y1 - y0 <= 40.0f) || !(x0 > -2000.0f && x1 < 2000.0f && y0 > -2000.0f && y1 < 2000.0f))
+    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f) || !(x0 > -2000.0f && x1 < 2000.0f && y0 > -2000.0f && y1 < 2000.0f))
         return;
     /* a new frame: the game thread emits a frame's sprites within a few ms; 8 ms of quiet starts the next list */
     if (now - s_fly_frame_ms > 8u) {
@@ -1973,46 +1974,52 @@ static void menu_flight_hide(uint32_t arg, uint32_t vp)
     cx = 0.5f * (x0 + x1);
     cy = 0.5f * (y0 + y1);
     prev = s_fly_cur ^ 1;
-    for (i = 0; i < s_fly_n[prev]; i++) {
-        float dx, dy;
-        if (s_fly[prev][i].arg != arg)
-            continue;
-        any = 1;
-        dx = fabsf(s_fly[prev][i].x - cx);
-        dy = fabsf(s_fly[prev][i].y - cy);
-        if (dy < best) best = dy;
-        if (dy <= 8.0f && dx <= 48.0f) { near = 1; break; }
-    }
-    hh = (arg >> 3) * 2654435761u >> 24;
-    if (!any) {
-        for (k = 0; k < 4; k++) {
-            i = (int)((hh + (uint32_t)k) & 255u);
-            if (seen[i].arg == arg && now - seen[i].t <= 100u) {
-                any = 1;
-                best = fabsf(cy - seen[i].y);
-                near = !(best > 45.0f);
-                break;
-            }
-        }
-    }
-    for (k = 0; k < 4; k++) {
-        i = (int)((hh + (uint32_t)k) & 255u);
-        if (seen[i].arg == arg || seen[i].arg == 0 || now - seen[i].t > 1000u) {
-            seen[i].arg = arg; seen[i].y = cy; seen[i].t = now;
-            break;
-        }
-    }
+    for (i = 0; i < s_fly_n[prev]; i++)
+        if (s_fly[prev][i].arg == arg) count++;
+    for (i = 0; i < s_fly_n[s_fly_cur]; i++)
+        if (s_fly[s_fly_cur][i].arg == arg) count += 2;         /* already drawn this frame */
     if (s_fly_n[s_fly_cur] < ORTA_FLY_N) {
         i = s_fly_n[s_fly_cur]++;
         s_fly[s_fly_cur][i].arg = arg;
         s_fly[s_fly_cur][i].x = cx;
         s_fly[s_fly_cur][i].y = cy;
     }
-    if (any && !near) {
+    hh = (arg >> 3) * 2654435761u >> 24;
+    for (k = 0; k < 8; k++) {
+        i = (int)((hh + (uint32_t)k) & 255u);
+        if (seen[i].arg == arg) { slot = i; break; }
+    }
+    if (slot < 0)
+        for (k = 0; k < 8; k++) {
+            i = (int)((hh + (uint32_t)k) & 255u);
+            if (seen[i].arg == 0 || now - seen[i].t > 1000u) {
+                slot = i;
+                seen[i].arg = arg; seen[i].y = cy; seen[i].t = now; seen[i].flying = 0; seen[i].calm = 0;
+                break;
+            }
+        }
+    if (slot < 0 || count > 1) {
+        if (slot >= 0) { seen[slot].flying = 0; seen[slot].y = cy; seen[slot].t = now; }
+        return;                                                   /* a multi record: the glints */
+    }
+    if (now - seen[slot].t <= 100u) {
+        dy = fabsf(cy - seen[slot].y);
+        if (dy > 45.0f) { seen[slot].flying = 1; seen[slot].calm = 0; }
+        else if (seen[slot].flying) {
+            if (dy <= 6.0f) { if (++seen[slot].calm >= 3) seen[slot].flying = 0; }
+            else seen[slot].calm = 0;
+        }
+    } else {
+        seen[slot].flying = 0;
+    }
+    seen[slot].y = cy;
+    seen[slot].t = now;
+    hide = seen[slot].flying;
+    if (hide) {
         if (s_fly_logged < 60) {
             s_fly_logged++;
-            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), %.1f rows from its last frame\n",
-                    arg, cx, cy, x1 - x0, y1 - y0, best);
+            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), %.1f rows this frame, %u ms after layout\n",
+                    arg, cx, cy, x1 - x0, y1 - y0, dy, now - s_opt_layout_ms);
         }
         memcpy(&b, &off, 4);
         for (j = 0; j < 4; j++)
