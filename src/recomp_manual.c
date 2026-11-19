@@ -940,6 +940,10 @@ static int opt_set_add(int which, uint32_t key, int depth)
 
 /* x_lo..x_hi: the column filter of the move mode (labels / bar left of OPT_VALUE_X, values right of it). */
 static uint32_t s_walk_x_lo = 21, s_walk_x_hi = 639;
+/* diagnosis (2026-11-20, the right side's glints fly up from below when OPTIONS opens, fine in SOUND / RECOMP):
+ * the words the screen's first layout moves right of x 400 - record id, place before and after */
+static int s_walk_log;
+static uint32_t s_walk_id, s_walk_line;
 
 /* A font's char table (sprite\Font\*_h_tbl.bin as loaded: header 0, 1, 0x1C, 0x1C, 0x200, then u16 glyph indices
  * per byte). Two neighbouring indices read as one "x | y << 16" word inside a row band - known issue #18: the walk
@@ -964,6 +968,11 @@ static int opt_shift_walk(uint32_t p, int depth, uint32_t old_y, int dy)
          * 20261104_103651_opt_bind1) */
         if (x > 20 && x < 640 && y + 26 >= old_y && y <= old_y + (x < 200u /* OPT_VALUE_X */ ? 5u : 12u) && y >= 20) {
             if (x >= s_walk_x_lo && x <= s_walk_x_hi && opt_set_add(1, a, 0)) {
+                if (s_walk_log > 0 && x >= 400u) {
+                    s_walk_log--;
+                    fprintf(stderr, "[WALK] line %u record %03X word %08X: x %u y %u -> %d\n", s_walk_line, s_walk_id, a,
+                            x, y, (int)y + dy);
+                }
                 GUEST32(a) = x | ((uint32_t)((int)y + dy) << 16); n++;
             }
         } else if (v >= 0x00400000u && v < 0x04000000u) {
@@ -1006,6 +1015,8 @@ static int opt_shift_line(int line, int from_row, int to_row, int mode)
          * other lines' bar records (0x0036BF00[]) are left out of this line's move. */
         for (b = 0; b < 9; b++) if (b != line && GUEST32(0x0036BF00u + 4 * (uint32_t)b) == id) other_bar = 1;
         if (other_bar) continue;
+        s_walk_id = id;
+        s_walk_line = (uint32_t)line;
         moved += opt_shift_walk(data, 0, y, dy);
         /* Sibling chain of sprite objects off the data block (+0x0C next, +0x10 prev; run
          * 20261104_065050_B_watchdots): a volume dot row is 11 such objects (x 380..580, step 20), each with its
@@ -2713,7 +2724,9 @@ static void opt_apply_view(void)
     for (line = 0; line < 9; line++) s_live_row[line] = 0;
     s_live_sel = 0; s_live_sel_line = 99;
     for (line = 0; line < 9; line++) s_opt_row[line] = s_opt_vrow[line] = line;
+    s_walk_log = 150;
     opt_layout(OPT_V_TOP);
+    s_walk_log = 0;
     s_opt_need_cursor = 1;
 }
 
