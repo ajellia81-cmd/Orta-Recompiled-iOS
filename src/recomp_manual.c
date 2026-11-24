@@ -325,12 +325,29 @@ void sub_002AFF90(RECOMP_PARAMS)
  * reads the same throughout. To check with every change here: movies still play smoothly (the count could feed
  * CRI's frame-skip logic). */
 extern void sub_00234930_gen(RECOMP_PARAMS);
+static volatile int s_in_flight;                /* (defined below, the HUD / menu state) */
 
 void sub_00234930(RECOMP_PARAMS)
 {
+    /* This worker lives exactly as long as a movie's streams: while it runs, the frames are shown at 16:9 when the
+     * aspect is wider (the movies are made for 16:9; iOS SCREEN = the phone's 2.17 stretched them - opening movie
+     * after NEW GAME's narration, 2026-11-24). */
+    extern void xbox_SetPresentAspectCap(double aspect);
+    extern double xbox_video_aspect(void);
+    int wide = xbox_video_aspect() > 16.0 / 9.0 + 0.01, on = 0, n = 0;
     while (GUEST32(0x00487D40u) == 0) {
         GUEST32(0x00487D28u) = GUEST32(0x00487D28u) + 1;
+        /* not in flight (should the streams ever run beside play) - checked every 16 ms */
+        if (wide && (n++ & 15) == 0 && on != !s_in_flight) {
+            on = !s_in_flight;
+            xbox_SetPresentAspectCap(on ? 16.0 / 9.0 : 0.0);
+            fprintf(stderr, "[MOVIE] %s\n", on ? "streams on: shown at 16:9" : "in flight: the full aspect");
+        }
         host_sleep_ns(1000000ull);
+    }
+    if (on) {
+        xbox_SetPresentAspectCap(0.0);
+        fprintf(stderr, "[MOVIE] streams off: the full aspect again\n");
     }
     sub_00234930_gen(ctx, base);   /* sees the flag set: marks itself ended and terminates */
 }

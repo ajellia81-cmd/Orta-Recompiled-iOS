@@ -363,7 +363,7 @@ index d3d9088..ed880a2 100644
          /* Its own TIB, for the same reason bridge_thread_main gives one to
           * every worker: a DPC routine with an SEH prologue reads fs:[0],
 diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
-index f2dabc9..751059c 100644
+index f2dabc9..cdd0ea9 100644
 --- a/src/kernel/kernel_xbox.c
 +++ b/src/kernel/kernel_xbox.c
 @@ -221,7 +221,16 @@ void (*volatile g_xbox_nv2a_idle_hook)(void) = NULL;
@@ -394,6 +394,40 @@ index f2dabc9..751059c 100644
      if (display_ratio >= XBOX_ASPECT_21_MIN && display_ratio <= XBOX_ASPECT_21_MAX) {
          s_video_aspect = display_ratio;
          fprintf(stderr, "  [video] 21:9 = the display's %.4f (64:27 = 2.3704)\n", display_ratio);
+@@ -290,6 +303,19 @@ int xbox_present_wide(void)
+     return xbox_video_widescreen() && s_present_wide != 0;
+ }
+ 
++/* A narrower aspect for the frames shown now, set by the port (0 = none): a title's movies made for 16:9 shown
++ * pillarboxed at 16:9 when the gameplay aspect is wider (iOS, the phone's whole screen; Panzer Dragoon Orta's
++ * opening movie came out stretched, 2026-11-24). */
++static volatile double s_present_aspect_cap;
++void xbox_SetPresentAspectCap(double aspect)
++{
++    s_present_aspect_cap = aspect > 0.0 ? aspect : 0.0;
++}
++double xbox_present_aspect_cap(void)
++{
++    return s_present_aspect_cap;
++}
++
+ /* The port's mark alone, whatever RECOMP_WIDESCREEN says: 1 gameplay (16:9),
+  * 0 a 4:3 frame, -1 never marked. The render scale's X follows it. */
+ int xbox_present_wide_mark(void)
+diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
+index dc2a493..ac3c23d 100644
+--- a/src/kernel/nv2a_backend.h
++++ b/src/kernel/nv2a_backend.h
+@@ -47,6 +47,9 @@ int xbox_present_wide(void);
+ void xbox_SetPresentWide(int wide);
+ /* The port's mark alone: 1 16:9, 0 4:3, -1 never marked. */
+ int xbox_present_wide_mark(void);
++/* A narrower aspect for the frames shown now (0 = none; the port: movies at 16:9 on a wider screen). */
++void xbox_SetPresentAspectCap(double aspect);
++double xbox_present_aspect_cap(void);
+ 
+ typedef struct {
+     uint32_t color_va;          /* guest address of pixel (0,0) */
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
 index 5d2a3fd..602aaa1 100644
 --- a/src/kernel/xbox_memory_layout.c
@@ -473,7 +507,7 @@ index 5d2a3fd..602aaa1 100644
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index 94b3884..d4c1aad 100644
+index 94b3884..a9420c3 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -71,13 +71,110 @@
@@ -723,6 +757,18 @@ index 94b3884..d4c1aad 100644
      }
      {
          /* Optional: VK_EXT_graphics_pipeline_library with fast linking - SHADER COMPILE: HYBRID links the prebuilt
+@@ -11637,6 +11786,11 @@ static void vk_flip(void)
+                 if (!s_boot_on                    /* the boot video keeps its own aspect */
+                     && (xbox_present_wide() || (xbox_video_widescreen() && stretch_43())) && lw < lh * 1.5f)
+                     lw = lh * (float)xbox_video_aspect();
++                {
++                    double cap = xbox_present_aspect_cap();   /* the port's cap (movies at 16:9) */
++                    if (!s_boot_on && cap > 1.0 && lw > lh * (float)cap)
++                        lw = lh * (float)cap;
++                }
+                 /* WINDOW CROP: the content rectangle fills the window, the margins fall outside it */
+                 if (!s_boot_on && !shader && s_dm_cur == NV2A_VK_DISPLAY_WINDOWED && crop_on()) {
+                     cmx = s_crop_mx;
 diff --git a/src/nv2a_vk/nv2a_vk.h b/src/nv2a_vk/nv2a_vk.h
 index cf7d03e..7f2dbb2 100644
 --- a/src/nv2a_vk/nv2a_vk.h
