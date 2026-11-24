@@ -13,7 +13,7 @@
 # ORTA_IOS_CHECK=1: no XBE, no lift - only the compile check (the toolkit runtime and the port's sources for iOS).
 #
 # Steps: [1] the lift (toolkit tools, capstone 5.0.7 as the toolkit's CI), [2] SDL3 / Vulkan-Headers / glslang for
-# iOS / MoltenVK, [3] the toolkit v1.1.1 + packaging/ios/toolkit/*.patch, [4] the game cross-compiled for arm64 iOS,
+# iOS / MoltenVK, [3] the toolkit v1.3.0 + packaging/ios/toolkit/*.patch, [4] the game cross-compiled for arm64 iOS,
 # [5] out/ios/OrtaRecomp.ipa (ad hoc signed; LiveContainer signs it again).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -30,7 +30,7 @@ SDL_TAG=release-3.4.18
 GLSLANG_TAG=16.6.0
 MVK_TAG=${MOLTENVK_VERSION:-v1.4.2}
 VKH_TAG=v1.4.368
-TK_TAG=v1.1.1
+TK_TAG=v1.3.0
 XBE_SHA1=57213ff35a19807def664f9018cc2923815dfa1f
 
 fail() { echo; echo "Build failed: $*"; exit 1; }
@@ -153,6 +153,8 @@ OUT=$ROOT/out/ios
 STAGE=$OUT/Payload
 rm -rf "$OUT" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
+# the shipped pipeline list (keys only, upstream assets/; main.c prewarms it at the device's start)
+cp assets/pipelist_orta_pal.bin "$STAGE/OrtaRecomp.app/"
 # the renderer's shader / pipeline lists from a played game (private release "xbe", optional): seeded into data/ on
 # the first start (ios_app.m orta_ios_seed_caches), so the boot prewarm has them all before the first scene
 if [ -n "${ORTA_SEED_DIR:-}" ] && ls "$ORTA_SEED_DIR"/*.bin >/dev/null 2>&1; then

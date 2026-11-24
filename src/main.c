@@ -47,8 +47,8 @@
 
 #if defined(ORTA_INSTALLER)
 /* First start (M5, CLAUDE.md "Portable install layout"; model THPS 2X thps_game_setup): game/ holds the extracted
- * disc or one disc image (XISO or full redump); an image is extracted into game/, every file checked, then deleted
- * (toolkit game_setup.h). Touches only game/. Version rules: a wrong title ID or an unsupported default.xbe stops
+ * disc or one disc image (XISO or full redump); an image is extracted into game/ and every file checked; the image
+ * itself is never deleted (since v1.2.1, GitHub #6; toolkit game_setup.h). Touches only game/. Version rules: a wrong title ID or an unsupported default.xbe stops
  * the start with the toolkit's message, for an image and an extracted folder alike. RECOMP_NO_DIALOGS=1: log only.
  * RECOMP_SETUP_TEST_FREE_MB=<n>: tests only, pretend the drive has n MB free. Returns 0 when the game cannot start. */
 static void setup_log(void *ctx, const char *text)
@@ -153,16 +153,6 @@ int main(int argc, char **argv)
     /* the frame times in orta.log every 5 s ("[fps] ... flip interval p50 / p99, short / long"): the stutter
      * reports need them (2026-11-19); RECOMP_FPS_LOG=0 turns it off */
     host_setenv_default("RECOMP_FPS_LOG", "1");
-    host_setenv_default("RECOMP_VK_THIN_LOG", "1");   /* thin bars drawn (cursor line thickness, 2026-11-19) */
-    /* SCREEN: Orta keeps 16 lines black at the top and the bottom of its widescreen frame in play (16 + 16 of 480,
-     * measured on the iPhone 18 Pro Max, 2026-11-19) - the bars the player saw. The present cuts them off and the
-     * 448 lines in between fill the screen; the frame's aspect is set narrower by the same amount (toolkit
-     * kernel_xbox.c), so the picture is not stretched and the camera sees as far to the sides as before.
-     * Cutscenes keep the rest of their own (wider) bars. */
-    if (!strcmp(settings_get("aspect_ratio", "4:3"), "21:9")) {
-        host_setenv_default("RECOMP_PRESENT_CROP_Y", "16");
-        orta_ios_set_crop_y(atoi(getenv("RECOMP_PRESENT_CROP_Y") ? getenv("RECOMP_PRESENT_CROP_Y") : "16"));
-    }
     /* and the 3D at the screen's own resolution, 1:1 to its pixels (RENDER RESOLUTION lists the screen's height in
      * place of the nearest step, recomp_manual.c) */
     if (!settings_get("render_scale_wide", NULL) && orta_ios_native_lines() > 480) {
@@ -178,13 +168,15 @@ int main(int argc, char **argv)
 #ifndef ORTA_IOS          /* iOS: VSYNC, FRAME PACING and SPEAKERS are not in the menus - on, display, stereo */
     if (!strcmp(settings_get("vsync", "on"), "off"))
         host_setenv_default("RECOMP_VSYNC", "0");
-#endif
-    /* RECOMP OPTIONS > FRAME RATE > FRAME PACING (frame_pacing=display|timer; port guideline 2026-11-05, THPS 2X
-     * v1.1.0): DISPLAY (default) = the guest vblank follows a 120 / 180 / 240 Hz display's own vblank (toolkit
-     * host_vblank); 60 HZ TIMER = the old clock. Read once by the kernel at start. */
-#ifndef ORTA_IOS
-    if (!strcmp(settings_get("frame_pacing", "display"), "timer"))
-        host_setenv_default("RECOMP_FRAME_PACING", "timer");
+    /* FRAME PACING (settings file only since 2026-11-23 - option-c docs/recomp_options_layout.md): frame_pacing =
+     * timer+paced / timer+immediate / display+paced / display+immediate / auto, old display / timer still read by
+     * the toolkit; handed over as is, read once by the kernel at start. Unset = the toolkit's auto - no default is
+     * written into the file. */
+    {
+        const char *fp = settings_get("frame_pacing", NULL);
+        if (fp && *fp)
+            host_setenv_default("RECOMP_FRAME_PACING", fp);
+    }
 #endif
     /* FRAME RATE 120 (night order 2026-11-07): the guest vblank at 120 Hz (toolkit RECOMP_GUEST_HZ); the game's
      * frame time step goes to 1/120 in orta_options_apply. ORTA_FPS=120 / 60 forces it for one run. */
@@ -449,6 +441,31 @@ static int orta_run(void *opt_ptr)
 #if defined(ORTA_VULKAN)
     nv2a_vk_set_key_handler(xbox_InputKeyEvent);
     nv2a_vk_set_quit_handler(host_quit);
+    {
+        /* The shipped pipeline list (toolkit nv2a_vk.c "shipped pipeline list"; maintainer 2026-11-16): keys only,
+         * recorded in test play, shipped as data\pipelist_orta_pal.bin and prewarmed at the device's start, so the
+         * first session compiles less on the fly. data\ may be deleted at any time - then the first session
+         * compiles on the fly as before. RECOMP_VK_PIPELIST=<file> overrides it (runs with a fresh data\). */
+        static char pl[1024];
+        const char *e = getenv("RECOMP_VK_PIPELIST");
+        if (e && *e)
+            snprintf(pl, sizeof pl, "%s", e);
+#if defined(ORTA_IOS)
+        else if (SDL_GetBasePath()) {
+            /* iOS: the list sits in the app (tools/build_ios.sh), always the one of this build */
+            FILE *t;
+            snprintf(pl, sizeof pl, "%spipelist_orta_pal.bin", SDL_GetBasePath());
+            if ((t = fopen(pl, "rb")) != NULL)
+                fclose(t);
+            else
+                snprintf(pl, sizeof pl, "%s/pipelist_orta_pal.bin", opt.data_dir);
+            fprintf(stderr, "[IOS] pipeline list: %s\n", pl);
+        }
+#endif
+        else
+            snprintf(pl, sizeof pl, "%s/pipelist_orta_pal.bin", opt.data_dir);
+        nv2a_vk_set_pipeline_list(pl);
+    }
     nv2a_vk_install();
     {
         extern void orta_options_apply(void);    /* recomp_manual.c: saved RECOMP OPTIONS values into the renderer */

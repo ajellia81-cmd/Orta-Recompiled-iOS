@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 465a4c9..db8ed6c 100644
+index bd0c8e2..01737e3 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -97,7 +97,8 @@ endif()
+@@ -103,7 +103,8 @@ endif()
  # The port installer (game_setup.h); its SDL3 window (xbox_install_ui) when SDL3 is there (the Vulkan build).
  add_subdirectory(src/install)
  # The player's one exe (release; launcher.h): needs the installer window and the zip reader (Vulkan build).
@@ -13,10 +13,10 @@ index 465a4c9..db8ed6c 100644
  endif()
  
 diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
-index 1e9b6b0..6df8f4f 100644
+index fae3489..9a351bb 100644
 --- a/src/apu/apu_core.c
 +++ b/src/apu/apu_core.c
-@@ -602,6 +602,21 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
+@@ -605,6 +605,21 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
      if ((d->ep_frame_div + 1) % 8) {
          return;
      }
@@ -38,7 +38,7 @@ index 1e9b6b0..6df8f4f 100644
  
      /* This block: frame_buf holds the 256 VP/DSP samples of the last eight frames (zero when se_frame did not run,
       * since it is cleared after every block). Tone and software mixer go on top, in real time.
-@@ -713,10 +728,22 @@ static void throttle(X86Ctx *ctx, MCPXAPUState *d)
+@@ -716,10 +731,22 @@ static void throttle(X86Ctx *ctx, MCPXAPUState *d)
  
      int64_t now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
  
@@ -209,7 +209,7 @@ index 4c19c68..0258466 100644
          return 0;
      if (g_sdl_channels == 2)
 diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
-index 7d43f7d..b573996 100644
+index 2c865a3..ed53029 100644
 --- a/src/input/xinput_device.c
 +++ b/src/input/xinput_device.c
 @@ -16,6 +16,12 @@
@@ -225,7 +225,7 @@ index 7d43f7d..b573996 100644
  
  /* ---- bindings per device (xinput_bind.h) ---------------------------------
   * The keyboard's default is the title's keymap, a pad's the positional
-@@ -423,6 +429,74 @@ static void sort_pads(void)
+@@ -430,6 +436,74 @@ static void sort_pads(void)
      fflush(stderr);
  }
  
@@ -300,7 +300,7 @@ index 7d43f7d..b573996 100644
  /* Open new pads and drop removed ones, at most every 500 ms: a title polls
   * every frame, and enumerating each time would cost more than the read. */
  static void refresh_pads(void)
-@@ -435,6 +509,16 @@ static void refresh_pads(void)
+@@ -442,6 +516,16 @@ static void refresh_pads(void)
  
      if (!SDL_WasInit(SDL_INIT_GAMEPAD))
          return;
@@ -317,7 +317,7 @@ index 7d43f7d..b573996 100644
      now = SDL_GetTicks();
      if (last && now - last < 500)
          return;
-@@ -473,6 +557,7 @@ static void refresh_pads(void)
+@@ -480,6 +564,7 @@ static void refresh_pads(void)
              snprintf(env_key, sizeof env_key, "PAD_%s", g_pad_guid[p]);
              snprintf(store_key, sizeof store_key, "bind.pad.%s", g_pad_guid[p]);
              bind_load(XBOX_BIND_PAD, env_key, "PAD", store_key, &s_pad_def, &g_pad_own[p], "pad");
@@ -326,10 +326,10 @@ index 7d43f7d..b573996 100644
          }
      }
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 110fdbd..c660811 100644
+index d3d9088..ed880a2 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
-@@ -2488,6 +2488,7 @@ static void bridge_HalReadSMCTrayState(X86Ctx *ctx)
+@@ -2503,6 +2503,7 @@ static void bridge_HalReadSMCTrayState(X86Ctx *ctx)
   * that ISR (burnout3-sw 0bf84b5, kernel_bridge.c). */
  static uint32_t g_vblank_dpc;
  static RECOMP_TLS int t_in_vblank_isr;
@@ -337,7 +337,7 @@ index 110fdbd..c660811 100644
  extern void xbox_Nv2aVblankHold(void);
  extern void xbox_Nv2aVblankRelease(void);
  extern void xbox_Nv2aVblankDrop(void);
-@@ -2678,6 +2679,16 @@ static int dpc_queue_insert(uint32_t dpc, uint32_t arg1, uint32_t arg2)
+@@ -2693,6 +2694,16 @@ static int dpc_queue_insert(uint32_t dpc, uint32_t arg1, uint32_t arg2)
      BRIDGE_MEM8(dpc + 2) = 1;
      g_dpc_tail = next;
      LeaveCriticalSection(&g_dpc_lock);
@@ -354,7 +354,7 @@ index 110fdbd..c660811 100644
      return 1;
  }
  
-@@ -3385,6 +3396,7 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -3452,6 +3463,7 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
          return 0;
      }
      g_esp = XBOX_WORKER_STACK_TOP(slot);
@@ -363,7 +363,7 @@ index 110fdbd..c660811 100644
          /* Its own TIB, for the same reason bridge_thread_main gives one to
           * every worker: a DPC routine with an SEH prologue reads fs:[0],
 diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
-index f2dabc9..7a2a26d 100644
+index f2dabc9..751059c 100644
 --- a/src/kernel/kernel_xbox.c
 +++ b/src/kernel/kernel_xbox.c
 @@ -221,7 +221,16 @@ void (*volatile g_xbox_nv2a_idle_hook)(void) = NULL;
@@ -383,7 +383,7 @@ index f2dabc9..7a2a26d 100644
  #define XBOX_ASPECT_21_MAX 2.42
  static double s_video_aspect = 0.0;
  static int s_video_aspect_21;                     /* 21:9 chosen: the ratio may follow the display */
-@@ -261,9 +270,27 @@ void xbox_video_aspect_fit(double display_ratio)
+@@ -261,6 +270,10 @@ void xbox_video_aspect_fit(double display_ratio)
      if (!s_video_aspect_21 || fitted)
          return;                                   /* the first call wins: RECOMP_DISPLAY_RATIO, then the display */
      fitted = 1;
@@ -394,25 +394,8 @@ index f2dabc9..7a2a26d 100644
      if (display_ratio >= XBOX_ASPECT_21_MIN && display_ratio <= XBOX_ASPECT_21_MAX) {
          s_video_aspect = display_ratio;
          fprintf(stderr, "  [video] 21:9 = the display's %.4f (64:27 = 2.3704)\n", display_ratio);
-+#if defined(__APPLE__) && TARGET_OS_IPHONE
-+        {
-+            /* RECOMP_PRESENT_CROP_Y=<lines of 480> (the port, iOS): rows the title keeps black at the top and the
-+             * bottom of its frame are cut off by the present (nv2a_vk.c), so the frame's whole 480 lines stand for
-+             * a narrower picture - the rows in between fill the display (Panzer Dragoon Orta's 16 + 16, 2026-11-19) */
-+            const char *c = getenv("RECOMP_PRESENT_CROP_Y");
-+            double y = c && *c ? strtod(c, NULL) : 0.0;
-+            if (y > 0.0 && y < 120.0) {
-+                s_video_aspect = display_ratio * (1.0 - 2.0 * y / 480.0);
-+                fprintf(stderr, "  [video] %g + %g of 480 lines cut off: the frame stands for %.4f\n", y, y,
-+                        s_video_aspect);
-+            }
-+        }
-+#endif
-     } else {
-         fprintf(stderr, "  [video] 21:9 stays 64:27 (display %.4f is no 21:9 panel)\n", display_ratio);
-     }
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index 8bb17ea..961c541 100644
+index 5d2a3fd..602aaa1 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -12,6 +12,12 @@
@@ -428,7 +411,7 @@ index 8bb17ea..961c541 100644
  #include "xbox_memory_layout.h"
  #include "kernel.h"
  #include "guest_vmem.h"
-@@ -36,7 +42,7 @@
+@@ -37,7 +43,7 @@
  /* arm64 Linux / Android: the AC97 trap emulates the faulting store with the AArch64 decoder instead of stepping it
   * (Orta on the S23, 2026-11-11: without the trap DirectSoundCreate spun at DISPATCH_LEVEL on a channel reset, the
   * one-CPU gate stayed shut and no interrupt was delivered again - a black screen). RECOMP_WATCH stays x86-only. */
@@ -437,7 +420,7 @@ index 8bb17ea..961c541 100644
  #define XR_AC97_EMULATE 1
  #include "platform/mmio_decode.h"
  #include <unistd.h>   /* sysconf */
-@@ -359,7 +365,13 @@ static const struct { uint32_t offset; uint32_t idle_mask; } NV2A_IDLE[] = {
+@@ -360,7 +366,13 @@ static const struct { uint32_t offset; uint32_t idle_mask; } NV2A_IDLE[] = {
   * Only RR. Bit 0 is RPBM, run/pause bus master, which software owns.
   */
  #define AC97_NABM_OFFSET  0x400000u   /* 0xFEC00000 within the MCPX aperture */
@@ -452,7 +435,7 @@ index 8bb17ea..961c541 100644
  #define AC97_RR           0x02u
  
  static void *g_ac97_page = NULL;      /* host address of the trapped page */
-@@ -560,10 +572,19 @@ static void ac97_arm_write_trap(void)
+@@ -568,10 +580,19 @@ static void ac97_arm_write_trap(void)
          return;
  #if XR_AC97_EMULATE
      /* the emulation writes through the host view, and the protection must cover only the NABM page */
@@ -476,23 +459,7 @@ index 8bb17ea..961c541 100644
      }
  #elif !XR_HOST_SINGLE_STEP
      (void)old;
-@@ -1188,6 +1209,15 @@ static int dp_measure(int64_t *period_ns, uint64_t *last_ns)
-         mult = (hz + 30) / 60;
-         fprintf(stderr, "  frame pacing: display measured %.3f Hz (try %d: %d of %d intervals within 0.5 ms of the median)\n",
-                 med > 0 ? 1e9 / (double)med : 0.0, attempt, ok, N);
-+#if defined(XR_DP_RETRY)
-+        /* iOS: the port holds the display at 60 Hz (a 120 Hz one shows a 60 Hz title's frames 1 and 3 refreshes
-+         * long), so 60 Hz paces too - the guest's vblank IS the display's, every frame gets the whole 16.7 ms
-+         * before the refresh it is shown at (the 60 Hz timer drifts against it: frames meet a refresh late or
-+         * early by turns, 2026-11-19) */
-+        if (mult == 1 && hz >= 58)
-+            mult = 1;
-+        else
-+#endif
-         if (hz < 110 || mult < 2 || mult > 4) {
-             fprintf(stderr, "  frame pacing: display below 120 Hz or above 240 Hz -> 60 Hz timer\n");
-             return 0;
-@@ -1267,6 +1297,12 @@ static DWORD WINAPI dp_thread(LPVOID unused)
+@@ -1280,6 +1301,12 @@ static DWORD WINAPI dp_thread(LPVOID unused)
                  dp_set_source(0, 0, 0);
          }
          host_vblank_close();
@@ -506,12 +473,12 @@ index 8bb17ea..961c541 100644
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index ec863b3..40e97f7 100644
+index 94b3884..d4c1aad 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
-@@ -74,6 +74,14 @@
- #define VK_USE_PLATFORM_VI_NN 1
- #endif
+@@ -71,13 +71,110 @@
+ #include "range_alloc.h"
+ 
  #include <vulkan/vulkan.h>
 +#if defined(__APPLE__)
 +#include <TargetConditionals.h>
@@ -521,13 +488,12 @@ index ec863b3..40e97f7 100644
 +#define XR_VK_IOS 1
 +#endif
 +#endif
- #if !defined(__SWITCH__)
  #include <SDL3/SDL.h>
  #include <SDL3/SDL_vulkan.h>
-@@ -82,9 +90,99 @@
+ #include "shader_pass.h"
+ #include "status_overlay.h"
  #include <glslang/Include/glslang_c_interface.h>
  #include <glslang/Public/resource_limits_c.h>
- 
 +#if defined(XR_VK_IOS)
 +/* iOS: UIKit objects belong to the main thread, and SDL pumps events only there. The NV2A thread makes and drives the
 + * window here, so on iOS the port runs the title on a thread of its own and keeps the main thread in a loop of
@@ -614,17 +580,14 @@ index ec863b3..40e97f7 100644
 +#define SDL_Vulkan_DestroySurface     xr_ios_Vulkan_DestroySurface
 +#define SDL_PollEvent                 xr_ios_PollEvent
 +#endif
-+
- #if defined(__SWITCH__)
- #include <pthread.h>
- #endif
+ 
 +#if defined(XR_VK_IOS)
 +#include <pthread/qos.h>
 +#endif
  #include <math.h>
  #include <stddef.h>
  #include <stdio.h>
-@@ -227,6 +325,14 @@ static void display_hz_update(void)
+@@ -225,6 +322,14 @@ static void display_hz_update(void)
          if (hwnd)
              xbox_GuestDisplayPacing(hwnd);
      }
@@ -638,8 +601,8 @@ index ec863b3..40e97f7 100644
 +    }
  #endif
  }
- #endif
-@@ -977,6 +1083,14 @@ static void scale_failed(void)
+ 
+@@ -972,6 +1077,14 @@ static void scale_failed(void)
              s_scale_x, s_scale, 1.0 + 0.25 * i);
  }
  
@@ -654,7 +617,7 @@ index ec863b3..40e97f7 100644
  void nv2a_vk_set_render_scale(double factor, int wide)
  {
      s_opt_wide = wide ? 1 : 0;
-@@ -2881,6 +2995,10 @@ static void *compile_thread(void *arg)
+@@ -3103,6 +3216,10 @@ static void *compile_thread(void *arg)
      glslang_shader_t *sh;
      glslang_program_t *pr;
  
@@ -665,493 +628,29 @@ index ec863b3..40e97f7 100644
      memset(&in, 0, sizeof in);
      in.language = GLSLANG_SOURCE_GLSL;
      in.stage = j->stage;
-@@ -2969,6 +3087,7 @@ static int cache_path(char *out, size_t cap, const char *name)
- typedef struct { uint64_t hash; uint32_t stage, nwords; uint32_t *words; } SpvEnt;
- static SpvEnt *s_spv;
- static uint32_t s_nspv, s_spv_cap, s_spv_hits;
-+static SDL_Mutex *s_spv_mx;                     /* async compiles (below): made before the first worker */
- 
- static uint64_t text_hash(const char *t, uint32_t stage)
+@@ -4032,6 +4149,10 @@ static VkPipeline ub_pre_build(VkShaderModule vsm)
+ static int SDLCALL ub_worker(void *arg)
  {
-@@ -3063,15 +3182,19 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
-     VkShaderModule m = VK_NULL_HANDLE;
- 
-     uint64_t hash = text_hash(src, (uint32_t)stage);
--    const SpvEnt *hit = spv_find(hash, (uint32_t)stage);
-+    const SpvEnt *hit;
- 
-+    SDL_LockMutex(s_spv_mx);                  /* the async workers compile too (NULL before they start: no-op) */
-+    hit = spv_find(hash, (uint32_t)stage);
-     if (hit) {
-         s_spv_hits++;
-         ci.codeSize = (size_t)hit->nwords * 4;
-         ci.pCode = hit->words;
-         vkCreateShaderModule(s_dev, &ci, NULL, &m);
-+        SDL_UnlockMutex(s_spv_mx);
-         return m;
-     }
-+    SDL_UnlockMutex(s_spv_mx);
-     VT("compile %s (%u bytes of GLSL)\n", stage == GLSLANG_STAGE_VERTEX ? "vs" : "fs",
-        (unsigned)strlen(src));
- #if defined(__SWITCH__)
-@@ -3102,8 +3225,12 @@ static VkShaderModule compile(glslang_stage_t stage, const char *src)
-     ci.pCode = j.words;
-     VT("  SPIR-V %u words -> vkCreateShaderModule\n", (unsigned)j.nwords);
-     vkCreateShaderModule(s_dev, &ci, NULL, &m);
--    spv_add(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
--    spv_append(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
-+    SDL_LockMutex(s_spv_mx);
-+    if (!spv_find(hash, (uint32_t)stage)) {
-+        spv_add(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
-+        spv_append(hash, (uint32_t)stage, j.words, (uint32_t)j.nwords);
-+    }
-+    SDL_UnlockMutex(s_spv_mx);
-     free(j.words);
-     return m;
- }
-@@ -3241,6 +3368,28 @@ static void prog_rec_batch(const ProgRec *rec, Nv2aRawBatch *bb, uint32_t n)
-     bb->vp_prog_gen = 0x80000000u + n;          /* hash it: not an executor version */
- }
- 
-+/* a program's GLSL (vertex + fragment) into vsrc / fsrc; < 0: not translatable */
-+static int prog_src(const Nv2aRawBatch *b, uint64_t vkey, const Nv2aPshKey *pk, char *vsrc, size_t vcap, char *fsrc,
-+                    size_t fcap)
-+{
-+    size_t n = (size_t)snprintf(vsrc, vcap, "%s", nv2a_gl_vsh_prelude());
-+    if (vkey) {
-+        int k = nv2a_gl_vsh_program(b->vp_program, b->vp_slots, b->vp_start, vsrc + n, vcap - n);
-+        if (k < 0)
-+            return -1;
-+        n += (size_t)k;
-+        snprintf(vsrc + n, vcap - n, "%s", nv2a_gl_vsh_main_program());
-+    } else {
-+        snprintf(vsrc + n, vcap - n, "%s", nv2a_gl_vsh_fixed());
-+    }
-+    return nv2a_gl_psh(pk, fsrc, fcap) < 0 ? -1 : 0;
-+}
-+
-+static int async_on(void);
-+static int aprog_take(const Nv2aRawBatch *b, uint64_t vkey, const Nv2aPshKey *pk, VkShaderModule *vs,
-+                      VkShaderModule *fs);
-+static void async_prog_evict(int prog);
-+
- static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
- {
-     static uint32_t last_gen;
-@@ -3250,8 +3399,8 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
-     uint64_t vkey = 0;
-     uint32_t bucket;
-     VkProg *p, *victim = NULL;
-+    VkShaderModule avs = VK_NULL_HANDLE, afs = VK_NULL_HANDLE;
-     int i;
--    size_t n;
- 
-     if (b->xform == 2) {
-         if (b->vp_prog_gen != last_gen || !last_vkey) {
-@@ -3273,6 +3422,12 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
-             return c;
-         }
-     }
-+    if (async_on()) {
-+        /* not built yet: a worker compiles it, the draws wait (skipped) until it is there - no frame stalls */
-+        int r = aprog_take(b, vkey, pk, &avs, &afs);
-+        if (r == 0)
-+            return NULL;
-+    }
-     for (i = 0; i < VK_MAX_PROG; i++) {
-         VkProg *c = &s_prog[i];
-         if (!c->vs) { if (!victim || victim->vs) victim = c; }
-@@ -3286,6 +3441,7 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
-             if (*at == me) { *at = p->next; break; }
-             at = &s_prog[*at - 1].next;
-         }
-+        async_prog_evict((int)(p - s_prog));
-         pipes_forget_prog((int)(p - s_prog));
-         vkDestroyShaderModule(s_dev, p->vs, NULL);
-         vkDestroyShaderModule(s_dev, p->fs, NULL);
-@@ -3293,20 +3449,15 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
-     }
-     memset(p, 0, sizeof *p);
- 
--    n = (size_t)snprintf(vsrc, sizeof vsrc, "%s", nv2a_gl_vsh_prelude());
--    if (vkey) {
--        int k = nv2a_gl_vsh_program(b->vp_program, b->vp_slots, b->vp_start, vsrc + n, sizeof vsrc - n);
--        if (k < 0)
--            return NULL;
--        n += (size_t)k;
--        snprintf(vsrc + n, sizeof vsrc - n, "%s", nv2a_gl_vsh_main_program());
-+    if (avs && afs) {
-+        p->vs = avs;                          /* the worker's */
-+        p->fs = afs;
-     } else {
--        snprintf(vsrc + n, sizeof vsrc - n, "%s", nv2a_gl_vsh_fixed());
-+        if (prog_src(b, vkey, pk, vsrc, sizeof vsrc, fsrc, sizeof fsrc) < 0)
-+            return NULL;
-+        p->vs = compile(GLSLANG_STAGE_VERTEX, vsrc);
-+        p->fs = compile(GLSLANG_STAGE_FRAGMENT, fsrc);
-     }
--    if (nv2a_gl_psh(pk, fsrc, sizeof fsrc) < 0)
--        return NULL;
--    p->vs = compile(GLSLANG_STAGE_VERTEX, vsrc);
--    p->fs = compile(GLSLANG_STAGE_FRAGMENT, fsrc);
-     if (!p->vs || !p->fs) {
-         if (p->vs) vkDestroyShaderModule(s_dev, p->vs, NULL);
-         if (p->fs) vkDestroyShaderModule(s_dev, p->fs, NULL);
-@@ -3440,12 +3591,9 @@ static void pipe_rec_append(const PipeKey *k)
-     }
- }
- 
--static VkPipeline pipe_get(const PipeKey *k)
-+static VkPipeline pipe_create(const PipeKey *k, VkShaderModule vsm, VkShaderModule fsm, int stats)
- {
--    const uint32_t *w = (const uint32_t *)k;
--    uint32_t h = 2166136261u, i;
--    int e;
--    PipeEnt *pe;
-+    uint32_t i;
-     VkGraphicsPipelineCreateInfo ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-     VkPipelineShaderStageCreateInfo st[2];
-     VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-@@ -3484,23 +3632,14 @@ static VkPipeline pipe_get(const PipeKey *k)
-     VkVertexInputBindingDescription vb[NV2A_RAW_ATTRS];
-     VkVertexInputAttributeDescription va[NV2A_RAW_ATTRS];
-     VkPipeline pipe = VK_NULL_HANDLE;
--    VkProg *p = &s_prog[k->prog];
--    size_t kb = PIPE_KEY_BYTES;
--
--    for (i = 0; i < kb / 4; i++)
--        h = (h ^ w[i]) * 16777619u;
--    h &= PIPE_BUCKETS - 1;
--    for (e = s_pipe_head[h]; e; e = s_pipes[e - 1].next)
--        if (s_pipes[e - 1].pipe && !memcmp(&s_pipes[e - 1].key, k, kb))
--            return s_pipes[e - 1].pipe;
- 
-     memset(st, 0, sizeof st);
-     st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
--    st[0].module = p->vs;
-+    st[0].module = vsm;
-     st[0].pName = "main";
-     st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
--    st[1].module = p->fs;
-+    st[1].module = fsm;
-     st[1].pName = "main";
-     ia.topology = k->topo == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
-                 : k->topo == 1 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
-@@ -3565,13 +3704,32 @@ static VkPipeline pipe_get(const PipeKey *k)
-     {
-         uint64_t t0 = hz_now();
-         VkResult pr = vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &pipe);
--        s_hz_pipes++;
--        s_hz_pipe_ns += hz_now() - t0;
-+        if (stats) {
-+            s_hz_pipes++;
-+            s_hz_pipe_ns += hz_now() - t0;
-+        }
-         if (pr != VK_SUCCESS) {
-             LOGE("pipeline creation failed\n");
-             return VK_NULL_HANDLE;
-         }
-     }
-+    return pipe;
-+}
-+
-+static uint32_t pipe_hash(const PipeKey *k)
-+{
-+    const uint32_t *w = (const uint32_t *)k;
-+    uint32_t h = 2166136261u, i;
-+    for (i = 0; i < PIPE_KEY_BYTES / 4; i++)
-+        h = (h ^ w[i]) * 16777619u;
-+    return h & (PIPE_BUCKETS - 1);
-+}
-+
-+/* a made pipeline into the table (and the record file) */
-+static VkPipeline pipe_insert(const PipeKey *k, VkPipeline pipe)
-+{
-+    PipeEnt *pe;
-+    uint32_t h = pipe_hash(k);
-     if (s_npipes == VK_MAX_PIPE) {
-         LOGE("pipeline table full\n");
-         return pipe;                          /* leaks; never seen in practice */
-@@ -3587,6 +3745,277 @@ static VkPipeline pipe_get(const PipeKey *k)
-     return pipe;
- }
- 
-+static int apipe_take(const PipeKey *k, VkPipeline *out);
-+
-+static VkPipeline pipe_get(const PipeKey *k)
-+{
-+    uint32_t h = pipe_hash(k);
-+    int e;
-+    VkPipeline pipe;
-+    for (e = s_pipe_head[h]; e; e = s_pipes[e - 1].next)
-+        if (s_pipes[e - 1].pipe && !memcmp(&s_pipes[e - 1].key, k, PIPE_KEY_BYTES))
-+            return s_pipes[e - 1].pipe;
-+    if (async_on()) {
-+        int r = apipe_take(k, &pipe);
-+        if (r == 0)
-+            return VK_NULL_HANDLE;            /* a worker builds it; the draw waits */
-+        if (r == 1)
-+            return pipe_insert(k, pipe);
-+    }
-+    pipe = pipe_create(k, s_prog[k->prog].vs, s_prog[k->prog].fs, 1);
-+    return pipe ? pipe_insert(k, pipe) : VK_NULL_HANDLE;
-+}
-+
-+/* ── Asynchronous shader / pipeline builds (2026-11-19, the iOS port: "no stutter the first time a scene is
-+ * played") ───────────────────────────────────────────────────────────────────────────────────────────────────────
-+ * A program or pipeline the title needs for the first time is built on a worker thread (glslang + MoltenVK's
-+ * Metal compile: up to 0.8 s on the A20 Pro) and the draws that need it are skipped until it is there - a few
-+ * frames without that object instead of a frame that stands still (the way emulators do it). The boot prewarm
-+ * (progcache / vkpipes, seeded from the app on iOS) stays synchronous, so known scenes lose nothing.
-+ * RECOMP_VK_ASYNC=0|1; on by default on iOS, off elsewhere (the original behaviour). */
-+#define AJ_MAX 128
-+#define AJ_WORKERS 2
-+typedef struct {
-+    int state;                                /* 0 free, 1 queued, 2 running, 3 done, 4 failed */
-+    int kind;                                 /* 0 program, 1 pipeline */
-+    uint32_t born;                            /* s_frame when queued (also the queue order) */
-+    uint64_t vkey;
-+    Nv2aPshKey pk;
-+    char *vsrc, *fsrc;
-+    VkShaderModule vs, fs;                    /* program: the result; pipeline: its stages */
-+    PipeKey key;
-+    VkPipeline pipe;
-+} AJob;
-+static AJob s_aj[AJ_MAX];
-+static SDL_Mutex *s_aj_mx;
-+static SDL_Condition *s_aj_cv, *s_aj_idle;
-+static int s_aj_busy;                         /* queued + running */
-+static int s_async = -1;
-+static uint32_t s_aj_queued, s_aj_skipped;
-+
-+static int SDLCALL aj_worker(void *unused)
-+{
-+    (void)unused;
+     (void)arg;
 +#if defined(XR_VK_IOS)
-+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);   /* below the game's threads, above background */
++    /* iOS: draws wait for this one - not the default class's efficiency cores (2026-11-19) */
++    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
 +#endif
-+    for (;;) {
-+        AJob *j = NULL;
-+        int i;
-+        SDL_LockMutex(s_aj_mx);
-+        for (;;) {
-+            for (i = 0; i < AJ_MAX; i++)
-+                if (s_aj[i].state == 1 && (!j || (int32_t)(s_aj[i].born - j->born) < 0))
-+                    j = &s_aj[i];
-+            if (j)
-+                break;
-+            SDL_WaitCondition(s_aj_cv, s_aj_mx);
-+        }
-+        j->state = 2;
-+        SDL_UnlockMutex(s_aj_mx);
-+        if (j->kind == 0) {
-+            VkShaderModule vs = compile(GLSLANG_STAGE_VERTEX, j->vsrc);
-+            VkShaderModule fs = vs ? compile(GLSLANG_STAGE_FRAGMENT, j->fsrc) : VK_NULL_HANDLE;
-+            if (!fs && vs) {
-+                vkDestroyShaderModule(s_dev, vs, NULL);
-+                vs = VK_NULL_HANDLE;
-+            }
-+            free(j->vsrc);
-+            free(j->fsrc);
-+            j->vsrc = j->fsrc = NULL;
-+            j->vs = vs;
-+            j->fs = fs;
-+        } else {
-+            j->pipe = pipe_create(&j->key, j->vs, j->fs, 0);
-+        }
-+        SDL_LockMutex(s_aj_mx);
-+        j->state = (j->kind == 0 ? j->vs != VK_NULL_HANDLE : j->pipe != VK_NULL_HANDLE) ? 3 : 4;
-+        if (--s_aj_busy == 0)
-+            SDL_BroadcastCondition(s_aj_idle);
-+        SDL_UnlockMutex(s_aj_mx);
-+    }
-+    return 0;
-+}
-+
-+static int async_on(void)
-+{
-+    if (s_async < 0) {
-+        const char *e = getenv("RECOMP_VK_ASYNC");
-+#if defined(XR_VK_IOS)
-+        s_async = !(e && e[0] == '0');
-+#else
-+        s_async = e && e[0] == '1';
-+#endif
-+        if (s_async) {
-+            int i, n = 0;
-+            s_spv_mx = SDL_CreateMutex();
-+            s_aj_mx = SDL_CreateMutex();
-+            s_aj_cv = SDL_CreateCondition();
-+            s_aj_idle = SDL_CreateCondition();
-+            for (i = 0; s_spv_mx && s_aj_mx && s_aj_cv && s_aj_idle && i < AJ_WORKERS; i++) {
-+                SDL_PropertiesID tp = SDL_CreateProperties();
-+                SDL_Thread *t;
-+                SDL_SetPointerProperty(tp, SDL_PROP_THREAD_CREATE_ENTRY_FUNCTION_POINTER, (void *)aj_worker);
-+                SDL_SetStringProperty(tp, SDL_PROP_THREAD_CREATE_NAME_STRING, "vk async compile");
-+                SDL_SetNumberProperty(tp, SDL_PROP_THREAD_CREATE_STACKSIZE_NUMBER, 8u << 20);
-+                t = SDL_CreateThreadWithProperties(tp);
-+                SDL_DestroyProperties(tp);
-+                if (t) {
-+                    SDL_DetachThread(t);
-+                    n++;
-+                }
-+            }
-+            if (!n)
-+                s_async = 0;
-+            LOGE("[VK] async compile: %s (%d workers; new shaders / pipelines are built beside the frame, their draws "
-+                 "wait; RECOMP_VK_ASYNC=0: in the frame)\n", n ? "on" : "off - no worker thread", n);
-+        }
-+    }
-+    return s_async > 0 && !s_prewarming;
-+}
-+
-+/* a free job slot (render thread, s_aj_mx held); done jobs nobody asked for again are given up after 10 s */
-+static AJob *aj_slot(void)
-+{
-+    int i;
-+    for (i = 0; i < AJ_MAX; i++)
-+        if (s_aj[i].state == 0)
-+            return &s_aj[i];
-+    for (i = 0; i < AJ_MAX; i++) {
-+        AJob *j = &s_aj[i];
-+        if (j->state == 3 && j->kind == 1) {
-+            pipe_insert(&j->key, j->pipe);    /* a pipeline is kept: the table takes it */
-+            j->state = 0;
-+            return j;
-+        }
-+    }
-+    for (i = 0; i < AJ_MAX; i++) {
-+        AJob *j = &s_aj[i];
-+        if ((j->state == 3 || j->state == 4) && j->kind == 0 && s_frame - j->born > 600) {
-+            if (j->vs) vkDestroyShaderModule(s_dev, j->vs, NULL);
-+            if (j->fs) vkDestroyShaderModule(s_dev, j->fs, NULL);
-+            j->state = 0;
-+            return j;
-+        }
-+    }
-+    return NULL;
-+}
-+
-+static void aj_queue(AJob *j)
-+{
-+    j->born = s_frame;
-+    j->state = 1;
-+    s_aj_busy++;
-+    s_aj_queued++;
-+    if ((s_aj_queued % 200) == 1)
-+        LOGE("[VK] async compile: %u builds queued so far, %u draws waited\n", s_aj_queued, s_aj_skipped);
-+    SDL_SignalCondition(s_aj_cv);
-+}
-+
-+/* 1: the program's modules in vs / fs; 0: being built (skip the draw); 2: build it here */
-+static int aprog_take(const Nv2aRawBatch *b, uint64_t vkey, const Nv2aPshKey *pk, VkShaderModule *vs,
-+                      VkShaderModule *fs)
-+{
-+    static char vsrc[320 * 1024], fsrc[64 * 1024];
-+    AJob *j;
-+    int i;
-+    SDL_LockMutex(s_aj_mx);
-+    for (i = 0; i < AJ_MAX; i++) {
-+        j = &s_aj[i];
-+        if (j->state && j->kind == 0 && j->vkey == vkey && !memcmp(&j->pk, pk, sizeof *pk)) {
-+            int st = j->state;
-+            if (st == 3) {
-+                *vs = j->vs;
-+                *fs = j->fs;
-+            }
-+            if (st >= 3)
-+                j->state = 0;
-+            SDL_UnlockMutex(s_aj_mx);
-+            if (st < 3)
-+                s_aj_skipped++;
-+            return st == 3 ? 1 : st == 4 ? 2 : 0;
-+        }
-+    }
-+    j = aj_slot();
-+    SDL_UnlockMutex(s_aj_mx);
-+    if (!j || prog_src(b, vkey, pk, vsrc, sizeof vsrc, fsrc, sizeof fsrc) < 0)
-+        return 2;
-+    memset(j, 0, sizeof *j);
-+    j->kind = 0;
-+    j->vkey = vkey;
-+    j->pk = *pk;
-+    j->vsrc = strdup(vsrc);
-+    j->fsrc = strdup(fsrc);
-+    if (!j->vsrc || !j->fsrc) {
-+        free(j->vsrc);
-+        free(j->fsrc);
-+        j->vsrc = j->fsrc = NULL;
-+        return 2;
-+    }
-+    SDL_LockMutex(s_aj_mx);
-+    aj_queue(j);
-+    SDL_UnlockMutex(s_aj_mx);
-+    s_aj_skipped++;
-+    return 0;
-+}
-+
-+/* 1: the pipeline in out; 0: being built (skip the draw); 2: build it here */
-+static int apipe_take(const PipeKey *k, VkPipeline *out)
-+{
-+    AJob *j;
-+    int i;
-+    SDL_LockMutex(s_aj_mx);
-+    for (i = 0; i < AJ_MAX; i++) {
-+        j = &s_aj[i];
-+        if (j->state && j->kind == 1 && !memcmp(&j->key, k, PIPE_KEY_BYTES)) {
-+            int st = j->state;
-+            if (st == 3)
-+                *out = j->pipe;
-+            if (st >= 3)
-+                j->state = 0;
-+            SDL_UnlockMutex(s_aj_mx);
-+            if (st < 3)
-+                s_aj_skipped++;
-+            return st == 3 ? 1 : st == 4 ? 2 : 0;
-+        }
-+    }
-+    j = aj_slot();
-+    if (!j) {
-+        SDL_UnlockMutex(s_aj_mx);
-+        return 2;
-+    }
-+    memset(j, 0, sizeof *j);
-+    j->kind = 1;
-+    j->key = *k;
-+    j->vs = s_prog[k->prog].vs;
-+    j->fs = s_prog[k->prog].fs;
-+    aj_queue(j);
-+    SDL_UnlockMutex(s_aj_mx);
-+    s_aj_skipped++;
-+    return 0;
-+}
-+
-+/* A program slot is reused (1024 live programs - rare): no worker may still build a pipeline from its modules, and
-+ * finished pipelines of it are dropped (their key names the slot, which is about to mean another program). */
-+static void async_prog_evict(int prog)
-+{
-+    int i;
-+    if (s_async <= 0)
-+        return;
-+    SDL_LockMutex(s_aj_mx);
-+    while (s_aj_busy)
-+        SDL_WaitCondition(s_aj_idle, s_aj_mx);
-+    for (i = 0; i < AJ_MAX; i++) {
-+        AJob *j = &s_aj[i];
-+        if (j->state >= 3 && j->kind == 1 && j->key.prog == prog) {
-+            if (j->pipe)
-+                garbage_add_pipe(j->pipe);
-+            j->state = 0;
-+        }
-+    }
-+    SDL_UnlockMutex(s_aj_mx);
-+}
-+
- static VkProg *prog_find(uint64_t vkey, const Nv2aPshKey *pk)
+     SDL_LockMutex(s_ub_mx);
+     for (;;) {
+         int i, job = -1;
+@@ -4643,6 +4764,10 @@ static uint64_t   s_async_wait_sum_ns;
+ static int SDLCALL async_worker(void *arg)
  {
-     int i;
-@@ -3756,15 +4185,19 @@ static int sc_extent_changed(void)
+     (void)arg;
++#if defined(XR_VK_IOS)
++    /* iOS: draws wait for this one - not the default class's efficiency cores (2026-11-19) */
++    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
++#endif
+     SDL_LockMutex(s_aj_mx);
+     for (;;) {
+         AsyncJob *j = NULL;
+@@ -5625,15 +5750,19 @@ static int sc_extent_changed(void)
      sc_choose(&caps, &e, &pre);
      return e.width != 0xFFFFFFFFu && (e.width != s_sc_extent.width || e.height != s_sc_extent.height);
  }
@@ -1172,7 +671,7 @@ index ec863b3..40e97f7 100644
      }
      return true;
  }
-@@ -3814,6 +4247,19 @@ static int surface_recreate(void)
+@@ -5679,6 +5808,19 @@ static int surface_recreate(void)
  static int sc_ready(void)
  {
      static unsigned retry;
@@ -1192,7 +691,7 @@ index ec863b3..40e97f7 100644
      if (SDL_GetAtomicInt(&s_sc_background))
          return 0;
      if (!SDL_GetAtomicInt(&s_sc_lost) && s_swapchain)
-@@ -4184,7 +4630,7 @@ static int ready(void)
+@@ -6036,7 +6178,7 @@ static int ready(void)
      VkPhysicalDeviceExtendedDynamicStateFeaturesEXT feds =
          { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT };
      VkPhysicalDeviceFeatures have;
@@ -1201,7 +700,7 @@ index ec863b3..40e97f7 100644
      uint32_t ndext = 0;
      const char *layers[1];
      uint32_t nlayers = 0;
-@@ -4444,7 +4890,7 @@ static int ready(void)
+@@ -6305,7 +6447,7 @@ static int ready(void)
          snprintf(w, sizeof w, "The window's Vulkan surface could not be created (SDL: %s).", SDL_GetError());
          vk_fatal(w);
      }
@@ -1210,7 +709,7 @@ index ec863b3..40e97f7 100644
      if (!s_headless)
          SDL_AddEventWatch(sc_event_watch, NULL);    /* background / foreground: the surface's life */
  #endif
-@@ -4480,6 +4926,13 @@ static int ready(void)
+@@ -6340,6 +6482,13 @@ static int ready(void)
                      s_have_budget = 1;
                      break;
                  }
@@ -1222,113 +721,10 @@ index ec863b3..40e97f7 100644
 +                break;
 +            }
      }
-     dci.pNext = &f2;
-     dci.queueCreateInfoCount = 1;
-@@ -4950,6 +5403,7 @@ static uint32_t zmax_of(const uint32_t *r)
- /* NV097 primitive -> Vulkan topology and (possibly rewritten) indices. */
- static uint32_t *s_prim_idx;
- static size_t    s_prim_cap;
-+static uint32_t  s_line_draws, s_line_verts, s_line_xform2;   /* diagnostics: line draws since the last [fps] */
- 
- static int prim_indices(const Nv2aRawBatch *b, const uint32_t **idx, uint32_t *n,
-                         VkPrimitiveTopology *topo, uint32_t *cls)
-@@ -5973,6 +6427,49 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
-         }
-         dn++;
-     }
-+#if defined(XR_VK_IOS)
-+    {
-+        /* RECOMP_VK_THIN_LOG (iOS, on by default from the port, 2026-11-19): every 4-vertex group of a draw that is
-+         * a thin horizontal bar (at most 4 title rows tall, 24+ wide) - the options' cursor lines were of different
-+         * thickness on the iPhone and two fixes in the port's 2D emitter changed nothing, so which draw path they
-+         * take and their exact corners. Once per program / row / height, at most 80 lines. */
-+        static int tl = -1;
-+        static uint32_t tseen[80], tn;
-+        if (tl < 0) {
-+            const char *e = getenv("RECOMP_VK_THIN_LOG");
-+            tl = e && *e && *e != '0';
-+        }
-+        if (tl && tn < 80 && b->vertex_count >= 4 && b->vertex_count <= 4096) {
-+            uint32_t g, h = vp_hash(b), i;
-+            for (g = 0; g + 4 <= b->vertex_count && tn < 80; g += 4) {
-+                float f[4], x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, ys[4], zw[2] = { 0, 0 };
-+                for (i = 0; i < 4; i++) {
-+                    if (b->attr_direct & 1u) attr_to_float4(b, 0, g + i, f);
-+                    else if (b->attr_present & 1u) memcpy(f, b->attrs + ((size_t)(g + i) * NV2A_RAW_ATTRS) * 4, sizeof f);
-+                    else { x1 = -2e30f; break; }
-+                    if (f[0] < x0) x0 = f[0];
-+                    if (f[0] > x1) x1 = f[0];
-+                    if (f[1] < y0) y0 = f[1];
-+                    if (f[1] > y1) y1 = f[1];
-+                    ys[i] = f[1];
-+                    zw[0] = f[2]; zw[1] = f[3];
-+                }
-+                if (x1 < -1e30f || !(y1 - y0 <= 4.0f * (b->aa_sy > 1 ? b->aa_sy : 1) && x1 - x0 >= 24.0f))
-+                    continue;
-+                {
-+                    uint32_t key = (h * 2654435761u) ^ ((uint32_t)(int)(y0 * 4.0f) << 8) ^ (uint32_t)(int)((y1 - y0) * 64.0f);
-+                    for (i = 0; i < tn && tseen[i] != key; i++) {}
-+                    if (i < tn) continue;
-+                    tseen[tn++] = key;
-+                }
-+                fprintf(stderr, "[THIN] f %u prog %08X xform %u prim %u n %u q %u: x %.4f..%.4f y %.6f %.6f %.6f %.6f "
-+                        "(h %.4f) z %.3g w %.3g surf %ux%u aa %ux%u scale %g x %g\n", s_frame, h, b->xform, b->prim,
-+                        b->vertex_count, g / 4, x0, x1, ys[0], ys[1], ys[2], ys[3], y1 - y0, zw[0], zw[1],
-+                        b->surface.width, b->surface.height, (unsigned)b->aa_sx, (unsigned)b->aa_sy, s_scale_x, s_scale);
-+            }
-+        }
-+    }
-+#endif
      {
-         int changed = regs_changed(r);
-         int sq = s_sq_k > 0.0f ? squash_decide(b) : 0;
-@@ -6012,6 +6509,11 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
-     }
-     if (!prim_indices(b, &idx, &n, &topo, &cls) || !n)
-         return;
-+    if (cls == 1) {                       /* lines: drawn 1 host pixel wide (the [fps] line counts them) */
-+        s_line_draws++;
-+        s_line_verts += n;
-+        s_line_xform2 += b->xform == 2;
-+    }
-     VT("draw: prim %u idx %u verts %u attrs %04X direct %04X xform %u surf %08X zeta %08X\n", b->prim, n,
-        b->vertex_count, b->attr_present, b->attr_direct, b->xform, b->surface.color_va, b->zeta_va);
-     s = target(&b->surface, b->zeta_va, &d);
-@@ -8414,6 +8916,10 @@ static void vk_flip(void)
-                 extern void xbox_vblank_report(double, char *, size_t);
-                 char vb[128], ft[256];
-                 fresh = 0;
-+                if (s_line_draws)
-+                    fprintf(stderr, "[fps] lines: %u draws, %u vertices (%u screen-space) - 1 host pixel wide\n",
-+                            s_line_draws, s_line_verts, s_line_xform2);
-+                s_line_draws = s_line_verts = s_line_xform2 = 0;
-                 memset(hist, 0, sizeof hist);
-                 n_int = 0;
-                 prev = 0;
-@@ -8719,6 +9225,21 @@ static void vk_flip(void)
-                     cmx = s_crop_mx;
-                     cmy = s_crop_my;
-                 }
-+#if defined(XR_VK_IOS)
-+                /* RECOMP_PRESENT_CROP_Y (iOS, the port): the title's fixed black rows at the top and the bottom are
-+                 * cut off in every display mode, the rows between them fill the screen (kernel_xbox.c gives the
-+                 * frame the narrower aspect that makes them exactly the display's) */
-+                if (!s_boot_on && !shader && xbox_video_widescreen()) {
-+                    static float fixed = -1.0f;
-+                    if (fixed < 0.0f) {
-+                        const char *e = getenv("RECOMP_PRESENT_CROP_Y");
-+                        double y = e && *e ? strtod(e, NULL) : 0.0;
-+                        fixed = y > 0.0 && y < 120.0 ? (float)(y / 480.0) : 0.0f;
-+                    }
-+                    if (fixed > cmy)
-+                        cmy = fixed;
-+                }
-+#endif
-                 /* the window's own aspect (4:3 or 16:9, set at its creation) less the margins - per window,
-                  * not per frame, so a title's 4:3 menus and 16:9 play do not resize it back and forth */
-                 if (s_dm_cur == NV2A_VK_DISPLAY_WINDOWED && !s_boot_on && s_win_aspect > 0.0f)
+         /* Optional: VK_EXT_graphics_pipeline_library with fast linking - SHADER COMPILE: HYBRID links the prebuilt
 diff --git a/src/nv2a_vk/nv2a_vk.h b/src/nv2a_vk/nv2a_vk.h
-index 103b966..1e0b767 100644
+index cf7d03e..7f2dbb2 100644
 --- a/src/nv2a_vk/nv2a_vk.h
 +++ b/src/nv2a_vk/nv2a_vk.h
 @@ -51,6 +51,7 @@ float nv2a_vk_display_hz(void);
@@ -1397,7 +793,7 @@ index 391ef1d..d564cd8 100644
  #define MMIO_CTX_PC(c) ((c)->Pc)
  #include "win32_compat.h"
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index b203c49..fbed99e 100644
+index 60c629b..478e2dc 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
 @@ -33,7 +33,16 @@
@@ -1417,7 +813,7 @@ index b203c49..fbed99e 100644
  #else
  #include <sys/sysinfo.h>
  #endif
-@@ -743,11 +752,22 @@ BOOL ReleaseMutex(HANDLE h)
+@@ -951,6 +960,16 @@ BOOL ReleaseMutex(HANDLE h)
  
  static void w32_thread_signal_setup(void);   /* the exception-handler section below */
  
@@ -1434,13 +830,15 @@ index b203c49..fbed99e 100644
  static void *thread_trampoline(void *arg)
  {
      w32_object *o = (w32_object *)arg;
-     t_self_obj = o;
-     t_tid      = o->tid;
+@@ -959,6 +978,7 @@ static void *thread_trampoline(void *arg)
+ #if defined(__linux__)
+     o->host_tid = (long)syscall(SYS_gettid);
+ #endif
 +    w32_thread_qos();
      w32_thread_signal_setup();      /* alternate signal stack: a stack overflow still reaches the handlers */
  
      /* CREATE_SUSPENDED gate */
-@@ -951,6 +971,7 @@ DWORD SleepEx(DWORD ms, BOOL alertable)
+@@ -1235,6 +1255,7 @@ DWORD SleepEx(DWORD ms, BOOL alertable)
  static void *timer_thread(void *arg)
  {
      w32_object *o = (w32_object *)arg;
@@ -1448,7 +846,7 @@ index b203c49..fbed99e 100644
      int once = (o->timer_period == 0);
  
      /* initial due time */
-@@ -1027,6 +1048,7 @@ struct w32_tp_args { PTP_SIMPLE_CALLBACK cb; PVOID ctx; };
+@@ -1311,6 +1332,7 @@ struct w32_tp_args { PTP_SIMPLE_CALLBACK cb; PVOID ctx; };
  static void *w32_tp_trampoline(void *arg)
  {
      struct w32_tp_args *a = (struct w32_tp_args *)arg;
@@ -1456,7 +854,7 @@ index b203c49..fbed99e 100644
      a->cb(NULL, a->ctx);
      free(a);
      return NULL;
-@@ -1145,9 +1167,16 @@ static int prot_from_page(DWORD protect)
+@@ -1430,9 +1452,16 @@ static int prot_from_page(DWORD protect)
      case PAGE_NOACCESS:          return PROT_NONE;
      case PAGE_READONLY:          return PROT_READ;
      case PAGE_READWRITE:         return PROT_READ | PROT_WRITE;
@@ -1473,7 +871,7 @@ index b203c49..fbed99e 100644
      default:                     return PROT_READ | PROT_WRITE;
      }
  }
-@@ -1168,6 +1197,22 @@ static int prot_from_page(DWORD protect)
+@@ -1453,6 +1482,22 @@ static int prot_from_page(DWORD protect)
   * Memory from mach_vm_map is released by munmap like any other, because the
   * BSD and Mach halves of Darwin share one VM map, so VirtualFree is unchanged.
   */
@@ -1496,7 +894,7 @@ index b203c49..fbed99e 100644
  static void *mach_map_fixed(void *address, size_t size, int prot)
  {
      mach_vm_address_t addr = (mach_vm_address_t)(uintptr_t)address;
-@@ -1196,6 +1241,7 @@ static void *mach_map_fixed(void *address, size_t size, int prot)
+@@ -1481,6 +1526,7 @@ static void *mach_map_fixed(void *address, size_t size, int prot)
      }
      return (void *)(uintptr_t)addr;
  }
@@ -1504,7 +902,7 @@ index b203c49..fbed99e 100644
  #endif
  
  /* Length registry, defined with the view helpers below. Win32 frees by address
-@@ -1789,6 +1835,17 @@ static int anon_map_fd(const char *name)
+@@ -2074,6 +2120,17 @@ static int anon_map_fd(const char *name)
      snprintf(shm_name, sizeof(shm_name), "/%s_%ld", base, seq);
      int fd = shm_open(shm_name, O_CREAT | O_RDWR | O_EXCL, 0600);
      if (fd >= 0) shm_unlink(shm_name);
@@ -1522,7 +920,7 @@ index b203c49..fbed99e 100644
      return fd;
  #elif defined(XR_COMPAT_MEMFD_SYSCALL)
      return (int)syscall(__NR_memfd_create, name ? name : "xbox_map", 0);
-@@ -2163,8 +2220,23 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
+@@ -2448,8 +2505,23 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
   * address; an access violation's write flag comes from the ESR record in the signal frame (WnR bit; no record ->
   * read). The MMIO handlers decode the faulting load/store with mmio_decode_a64.h through mmio_decode.h.
   */
@@ -1547,7 +945,7 @@ index b203c49..fbed99e 100644
  #if defined(__aarch64__)
  #include "mmio_decode_a64.h"   /* mmio_a64_find_esr / mmio_a64_syndrome */
  #endif
-@@ -2178,7 +2250,53 @@ static const int s_veh_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
+@@ -2463,7 +2535,53 @@ static const int s_veh_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
  static struct sigaction s_veh_old[VEH_NSIGS];
  static int s_veh_installed;
  

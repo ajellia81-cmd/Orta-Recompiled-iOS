@@ -39,8 +39,9 @@ add_subdirectory(${SDL3_SRC} sdl3 EXCLUDE_FROM_ALL)
 set(Vulkan_INCLUDE_DIR ${VULKAN_INCLUDE} CACHE PATH "" FORCE)
 set(Vulkan_LIBRARY ${MOLTENVK_LIB} CACHE FILEPATH "" FORCE)
 
-# The toolkit, as the root CMakeLists.txt sets it up: Vulkan only, no D3D11
-add_compile_definitions(RECOMP_ICALL_FEEDBACK)
+# The toolkit, as the root CMakeLists.txt sets it up: Vulkan only, no D3D11; no indirect-call feedback (v1.3.0: never
+# in a release). The APU emulation linked in (an iOS app loads no library of its own making at run time).
+set(XBOXRECOMP_APU_SHARED OFF CACHE BOOL "" FORCE)
 set(XBOXRECOMP_VULKAN ON CACHE BOOL "" FORCE)
 set(XBOXRECOMP_D3D11 OFF CACHE BOOL "" FORCE)
 add_subdirectory(${XR_TOOLKIT} xboxrecomp EXCLUDE_FROM_ALL)
