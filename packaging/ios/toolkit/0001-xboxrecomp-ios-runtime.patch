@@ -326,7 +326,7 @@ index 2c865a3..ed53029 100644
          }
      }
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index d3d9088..ed880a2 100644
+index 79a8a58..c74bcee 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -2503,6 +2503,7 @@ static void bridge_HalReadSMCTrayState(X86Ctx *ctx)
@@ -429,7 +429,7 @@ index dc2a493..ac3c23d 100644
  typedef struct {
      uint32_t color_va;          /* guest address of pixel (0,0) */
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index 5d2a3fd..602aaa1 100644
+index 5843969..b6bbf39 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -12,6 +12,12 @@
@@ -493,7 +493,7 @@ index 5d2a3fd..602aaa1 100644
      }
  #elif !XR_HOST_SINGLE_STEP
      (void)old;
-@@ -1280,6 +1301,12 @@ static DWORD WINAPI dp_thread(LPVOID unused)
+@@ -1300,6 +1321,12 @@ static DWORD WINAPI dp_thread(LPVOID unused)
                  dp_set_source(0, 0, 0);
          }
          host_vblank_close();
@@ -506,8 +506,18 @@ index 5d2a3fd..602aaa1 100644
          /* wait for a new window / display before trying again (2 s poll) */
          while (gen == InterlockedCompareExchange(&s_dp_gen, 0, 0))
              host_sleep_ns(2000000000ull);
+@@ -1346,7 +1373,8 @@ static void fp_parse(void)
+         s_fp_timer = 1;
+     else if (strcmp(src, "display"))
+         s_fp_auto = 1;                            /* unset, "auto" or unknown */
+-#if !defined(_WIN32)
++#if !defined(_WIN32) && !defined(XR_DP_RETRY)   /* iOS: the CADisplayLink - the display stays auto's source (it ended
++                                                   * the iPhone's stutter, 2026-11-19) */
+     /* Linux / Android have a display vblank since 2026-11-24 (DRM / the Choreographer), but auto stays the timer
+      * there - option-p's decision after held pictures on the Odin's display source (0.1-0.5 s, 3 of 6 runs); the
+      * display only when chosen ("display+..." in the settings file) until a worst-second check passes there */
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index 94b3884..a9420c3 100644
+index 5d4d572..0d5a1e8 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -71,13 +71,110 @@
@@ -621,22 +631,7 @@ index 94b3884..a9420c3 100644
  #include <math.h>
  #include <stddef.h>
  #include <stdio.h>
-@@ -225,6 +322,14 @@ static void display_hz_update(void)
-         if (hwnd)
-             xbox_GuestDisplayPacing(hwnd);
-     }
-+#elif defined(XR_VK_IOS)
-+    {
-+        /* iOS: the same, the display's refresh from the app's CADisplayLink (host_vblank.c) - there is one screen,
-+         * so the window only says "now" */
-+        extern void xbox_GuestDisplayPacing(void *native_window);
-+        if (s_win)
-+            xbox_GuestDisplayPacing((void *)s_win);
-+    }
- #endif
- }
- 
-@@ -972,6 +1077,14 @@ static void scale_failed(void)
+@@ -977,6 +1074,14 @@ static void scale_failed(void)
              s_scale_x, s_scale, 1.0 + 0.25 * i);
  }
  
@@ -651,7 +646,7 @@ index 94b3884..a9420c3 100644
  void nv2a_vk_set_render_scale(double factor, int wide)
  {
      s_opt_wide = wide ? 1 : 0;
-@@ -3103,6 +3216,10 @@ static void *compile_thread(void *arg)
+@@ -3108,6 +3213,10 @@ static void *compile_thread(void *arg)
      glslang_shader_t *sh;
      glslang_program_t *pr;
  
@@ -662,7 +657,7 @@ index 94b3884..a9420c3 100644
      memset(&in, 0, sizeof in);
      in.language = GLSLANG_SOURCE_GLSL;
      in.stage = j->stage;
-@@ -4032,6 +4149,10 @@ static VkPipeline ub_pre_build(VkShaderModule vsm)
+@@ -4037,6 +4146,10 @@ static VkPipeline ub_pre_build(VkShaderModule vsm)
  static int SDLCALL ub_worker(void *arg)
  {
      (void)arg;
@@ -673,7 +668,7 @@ index 94b3884..a9420c3 100644
      SDL_LockMutex(s_ub_mx);
      for (;;) {
          int i, job = -1;
-@@ -4643,6 +4764,10 @@ static uint64_t   s_async_wait_sum_ns;
+@@ -4648,6 +4761,10 @@ static uint64_t   s_async_wait_sum_ns;
  static int SDLCALL async_worker(void *arg)
  {
      (void)arg;
@@ -684,7 +679,7 @@ index 94b3884..a9420c3 100644
      SDL_LockMutex(s_aj_mx);
      for (;;) {
          AsyncJob *j = NULL;
-@@ -5625,15 +5750,19 @@ static int sc_extent_changed(void)
+@@ -5630,15 +5747,19 @@ static int sc_extent_changed(void)
      sc_choose(&caps, &e, &pre);
      return e.width != 0xFFFFFFFFu && (e.width != s_sc_extent.width || e.height != s_sc_extent.height);
  }
@@ -705,7 +700,7 @@ index 94b3884..a9420c3 100644
      }
      return true;
  }
-@@ -5679,6 +5808,19 @@ static int surface_recreate(void)
+@@ -5684,6 +5805,19 @@ static int surface_recreate(void)
  static int sc_ready(void)
  {
      static unsigned retry;
@@ -725,7 +720,7 @@ index 94b3884..a9420c3 100644
      if (SDL_GetAtomicInt(&s_sc_background))
          return 0;
      if (!SDL_GetAtomicInt(&s_sc_lost) && s_swapchain)
-@@ -6036,7 +6178,7 @@ static int ready(void)
+@@ -6041,7 +6175,7 @@ static int ready(void)
      VkPhysicalDeviceExtendedDynamicStateFeaturesEXT feds =
          { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT };
      VkPhysicalDeviceFeatures have;
@@ -734,7 +729,7 @@ index 94b3884..a9420c3 100644
      uint32_t ndext = 0;
      const char *layers[1];
      uint32_t nlayers = 0;
-@@ -6305,7 +6447,7 @@ static int ready(void)
+@@ -6310,7 +6444,7 @@ static int ready(void)
          snprintf(w, sizeof w, "The window's Vulkan surface could not be created (SDL: %s).", SDL_GetError());
          vk_fatal(w);
      }
@@ -743,7 +738,7 @@ index 94b3884..a9420c3 100644
      if (!s_headless)
          SDL_AddEventWatch(sc_event_watch, NULL);    /* background / foreground: the surface's life */
  #endif
-@@ -6340,6 +6482,13 @@ static int ready(void)
+@@ -6345,6 +6479,13 @@ static int ready(void)
                      s_have_budget = 1;
                      break;
                  }
@@ -757,7 +752,7 @@ index 94b3884..a9420c3 100644
      }
      {
          /* Optional: VK_EXT_graphics_pipeline_library with fast linking - SHADER COMPILE: HYBRID links the prebuilt
-@@ -11637,6 +11786,11 @@ static void vk_flip(void)
+@@ -11651,6 +11792,11 @@ static void vk_flip(void)
                  if (!s_boot_on                    /* the boot video keeps its own aspect */
                      && (xbox_present_wide() || (xbox_video_widescreen() && stretch_43())) && lw < lh * 1.5f)
                      lw = lh * (float)xbox_video_aspect();
@@ -782,24 +777,28 @@ index cf7d03e..7f2dbb2 100644
   * limits, no earlier allocation failure there -- no free-VRAM estimate:
   * maintainer, 2026-10-26), 0 if the menu should refuse it. A factor that
 diff --git a/src/platform/host_vblank.c b/src/platform/host_vblank.c
-index 66434b5..45c6897 100644
+index dc12a80..dd132a8 100644
 --- a/src/platform/host_vblank.c
 +++ b/src/platform/host_vblank.c
-@@ -104,7 +104,38 @@ void host_vblank_close(void)
+@@ -18,6 +18,9 @@
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <string.h>
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
+ 
+ #if defined(_WIN32)
+ #include <windows.h>
+@@ -110,6 +113,32 @@ void host_vblank_close(void)
      s_open = 0;
  }
  
--#else
-+#elif defined(__APPLE__)
-+#include <TargetConditionals.h>
-+#endif
-+
-+#if defined(__APPLE__) && TARGET_OS_IPHONE && !defined(_WIN32)
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
 +/* iOS (2026-11-19): the display's refresh through a CADisplayLink the app runs (Objective-C, so in the port:
 + * packaging/ios ios_app.m - weak here, a build without it has no display pacing). Without it the guest vblank ran
 + * on the 60 Hz timer beside a display it does not know, and the two drifted: a frame shown twice, the next one
-+ * skipped, over and over (the first iPhone run's stutter). With the app's 120 Hz (CADisableMinimumFrameDuration-
-+ * OnPhone) FRAME PACING Display then takes every 2nd refresh, as on a Windows 120 Hz monitor. */
++ * skipped, over and over (the first iPhone run's stutter). */
 +extern int xr_ios_vblank_open(void) __attribute__((weak));
 +extern int xr_ios_vblank_wait(void) __attribute__((weak));
 +extern void xr_ios_vblank_close(void) __attribute__((weak));
@@ -821,10 +820,9 @@ index 66434b5..45c6897 100644
 +        xr_ios_vblank_close();
 +}
 +
-+#elif !defined(_WIN32)
+ #elif defined(__ANDROID__)
  
- int host_vblank_open(void *native_window)
- {
+ /* Android (2026-11-24; option-p's platform_linux.cpp as the model): the Choreographer's frame callbacks
 diff --git a/src/platform/mmio_decode.h b/src/platform/mmio_decode.h
 index 391ef1d..d564cd8 100644
 --- a/src/platform/mmio_decode.h
@@ -839,7 +837,7 @@ index 391ef1d..d564cd8 100644
  #define MMIO_CTX_PC(c) ((c)->Pc)
  #include "win32_compat.h"
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index 60c629b..478e2dc 100644
+index caf407f..dcd9600 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
 @@ -33,7 +33,16 @@
@@ -859,7 +857,7 @@ index 60c629b..478e2dc 100644
  #else
  #include <sys/sysinfo.h>
  #endif
-@@ -951,6 +960,16 @@ BOOL ReleaseMutex(HANDLE h)
+@@ -993,6 +1002,16 @@ BOOL ReleaseMutex(HANDLE h)
  
  static void w32_thread_signal_setup(void);   /* the exception-handler section below */
  
@@ -876,7 +874,7 @@ index 60c629b..478e2dc 100644
  static void *thread_trampoline(void *arg)
  {
      w32_object *o = (w32_object *)arg;
-@@ -959,6 +978,7 @@ static void *thread_trampoline(void *arg)
+@@ -1001,6 +1020,7 @@ static void *thread_trampoline(void *arg)
  #if defined(__linux__)
      o->host_tid = (long)syscall(SYS_gettid);
  #endif
@@ -884,7 +882,7 @@ index 60c629b..478e2dc 100644
      w32_thread_signal_setup();      /* alternate signal stack: a stack overflow still reaches the handlers */
  
      /* CREATE_SUSPENDED gate */
-@@ -1235,6 +1255,7 @@ DWORD SleepEx(DWORD ms, BOOL alertable)
+@@ -1277,6 +1297,7 @@ DWORD SleepEx(DWORD ms, BOOL alertable)
  static void *timer_thread(void *arg)
  {
      w32_object *o = (w32_object *)arg;
@@ -892,7 +890,7 @@ index 60c629b..478e2dc 100644
      int once = (o->timer_period == 0);
  
      /* initial due time */
-@@ -1311,6 +1332,7 @@ struct w32_tp_args { PTP_SIMPLE_CALLBACK cb; PVOID ctx; };
+@@ -1353,6 +1374,7 @@ struct w32_tp_args { PTP_SIMPLE_CALLBACK cb; PVOID ctx; };
  static void *w32_tp_trampoline(void *arg)
  {
      struct w32_tp_args *a = (struct w32_tp_args *)arg;
@@ -900,7 +898,7 @@ index 60c629b..478e2dc 100644
      a->cb(NULL, a->ctx);
      free(a);
      return NULL;
-@@ -1430,9 +1452,16 @@ static int prot_from_page(DWORD protect)
+@@ -1472,9 +1494,16 @@ static int prot_from_page(DWORD protect)
      case PAGE_NOACCESS:          return PROT_NONE;
      case PAGE_READONLY:          return PROT_READ;
      case PAGE_READWRITE:         return PROT_READ | PROT_WRITE;
@@ -917,7 +915,7 @@ index 60c629b..478e2dc 100644
      default:                     return PROT_READ | PROT_WRITE;
      }
  }
-@@ -1453,6 +1482,22 @@ static int prot_from_page(DWORD protect)
+@@ -1495,6 +1524,22 @@ static int prot_from_page(DWORD protect)
   * Memory from mach_vm_map is released by munmap like any other, because the
   * BSD and Mach halves of Darwin share one VM map, so VirtualFree is unchanged.
   */
@@ -940,7 +938,7 @@ index 60c629b..478e2dc 100644
  static void *mach_map_fixed(void *address, size_t size, int prot)
  {
      mach_vm_address_t addr = (mach_vm_address_t)(uintptr_t)address;
-@@ -1481,6 +1526,7 @@ static void *mach_map_fixed(void *address, size_t size, int prot)
+@@ -1523,6 +1568,7 @@ static void *mach_map_fixed(void *address, size_t size, int prot)
      }
      return (void *)(uintptr_t)addr;
  }
@@ -948,7 +946,7 @@ index 60c629b..478e2dc 100644
  #endif
  
  /* Length registry, defined with the view helpers below. Win32 frees by address
-@@ -2074,6 +2120,17 @@ static int anon_map_fd(const char *name)
+@@ -2116,6 +2162,17 @@ static int anon_map_fd(const char *name)
      snprintf(shm_name, sizeof(shm_name), "/%s_%ld", base, seq);
      int fd = shm_open(shm_name, O_CREAT | O_RDWR | O_EXCL, 0600);
      if (fd >= 0) shm_unlink(shm_name);
@@ -966,7 +964,7 @@ index 60c629b..478e2dc 100644
      return fd;
  #elif defined(XR_COMPAT_MEMFD_SYSCALL)
      return (int)syscall(__NR_memfd_create, name ? name : "xbox_map", 0);
-@@ -2448,8 +2505,23 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
+@@ -2490,8 +2547,23 @@ VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
   * address; an access violation's write flag comes from the ESR record in the signal frame (WnR bit; no record ->
   * read). The MMIO handlers decode the faulting load/store with mmio_decode_a64.h through mmio_decode.h.
   */
@@ -991,7 +989,7 @@ index 60c629b..478e2dc 100644
  #if defined(__aarch64__)
  #include "mmio_decode_a64.h"   /* mmio_a64_find_esr / mmio_a64_syndrome */
  #endif
-@@ -2463,7 +2535,53 @@ static const int s_veh_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
+@@ -2505,7 +2577,53 @@ static const int s_veh_sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
  static struct sigaction s_veh_old[VEH_NSIGS];
  static int s_veh_installed;
  

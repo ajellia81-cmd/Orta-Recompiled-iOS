@@ -13,7 +13,7 @@
 # ORTA_IOS_CHECK=1: no XBE, no lift - only the compile check (the toolkit runtime and the port's sources for iOS).
 #
 # Steps: [1] the lift (toolkit tools, capstone 5.0.7 as the toolkit's CI), [2] SDL3 / Vulkan-Headers / glslang for
-# iOS / MoltenVK, [3] the toolkit v1.3.0 + packaging/ios/toolkit/*.patch, [4] the game cross-compiled for arm64 iOS,
+# iOS / MoltenVK, [3] the toolkit v1.3.1 + packaging/ios/toolkit/*.patch, [4] the game cross-compiled for arm64 iOS,
 # [5] out/ios/OrtaRecomp.ipa (ad hoc signed; LiveContainer signs it again).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -30,7 +30,7 @@ SDL_TAG=release-3.4.18
 GLSLANG_TAG=16.6.0
 MVK_TAG=${MOLTENVK_VERSION:-v1.4.2}
 VKH_TAG=v1.4.368
-TK_TAG=v1.3.0
+TK_TAG=v1.3.1
 XBE_SHA1=57213ff35a19807def664f9018cc2923815dfa1f
 
 fail() { echo; echo "Build failed: $*"; exit 1; }
