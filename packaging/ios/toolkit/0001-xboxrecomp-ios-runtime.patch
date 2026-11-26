@@ -517,7 +517,7 @@ index 5843969..b6bbf39 100644
       * there - option-p's decision after held pictures on the Odin's display source (0.1-0.5 s, 3 of 6 runs); the
       * display only when chosen ("display+..." in the settings file) until a worst-second check passes there */
 diff --git a/src/nv2a_vk/nv2a_vk.c b/src/nv2a_vk/nv2a_vk.c
-index 5d4d572..0d5a1e8 100644
+index 5d4d572..2adc895 100644
 --- a/src/nv2a_vk/nv2a_vk.c
 +++ b/src/nv2a_vk/nv2a_vk.c
 @@ -71,13 +71,110 @@
@@ -679,6 +679,15 @@ index 5d4d572..0d5a1e8 100644
      SDL_LockMutex(s_aj_mx);
      for (;;) {
          AsyncJob *j = NULL;
+@@ -4693,7 +4810,7 @@ static int SDLCALL async_worker(void *arg)
+  * long frames equal, the uber FS ~2.2x a specialised one only while a shader is built), WAIT on Android (the
+  * graphics-pipeline-library path on Turnip not measured yet; HYBRID stays selectable there). Without
+  * VK_EXT_graphics_pipeline_library HYBRID draws as WAIT. */
+-#if defined(__ANDROID__)
++#if defined(__ANDROID__) || defined(XR_VK_IOS)   /* iOS: MoltenVK has no graphics pipeline library */
+ #define ASYNC_DEFAULT 2
+ #else
+ #define ASYNC_DEFAULT 3
 @@ -5630,15 +5747,19 @@ static int sc_extent_changed(void)
      sc_choose(&caps, &e, &pre);
      return e.width != 0xFFFFFFFFu && (e.width != s_sc_extent.width || e.height != s_sc_extent.height);

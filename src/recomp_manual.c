@@ -1258,8 +1258,15 @@ static const opt_val_t k_rv[RV_N] = {
                       { "LOW", "MEDIUM", "HIGH", "MAX" }, 4 },                    /* = NV2A_VK_FSR_SHARP_* */
     /* SHADER COMPILE (RENDERING page): index = NV2A_VK_ASYNC_*; the default is the toolkit's (HYBRID on Windows /
      * Linux, WAIT on Android) - nothing is stored until the player picks a value, Y removes it again */
+#if defined(ORTA_IOS_SCREEN)
+    /* iOS (2026-11-26): no HYBRID - it needs VK_EXT_graphics_pipeline_library, which MoltenVK has not; it drew as WAIT
+     * anyway (the toolkit's iOS default is WAIT too) */
+    [RV_SHADERS]  = { "SHADER COMPILE", "shader_compile", NULL, { "off", "skip", "wait" },
+                      { "OFF", "SKIP", "WAIT" }, 3 },
+#else
     [RV_SHADERS]  = { "SHADER COMPILE", "shader_compile", NULL, { "off", "skip", "wait", "hybrid" },
                       { "OFF", "SKIP", "WAIT", "HYBRID" }, 4 },
+#endif
     [RV_SHNOTICE] = { "SHADER NOTICE", "shader_notice", "on", { "on", "off" }, { "ON", "OFF" }, 2 },
     [RV_BOOT]     = { "BOOT ANIMATION", "boot_animation", "on", { "on", "off" }, { "ON", "OFF" }, 2 },
     [RV_DISPLAY]  = { "DISPLAY MODE", "display_mode", "borderless", { "fullscreen", "borderless", "windowed" },
@@ -1477,7 +1484,7 @@ static void perf_store(int mask)
 static int rv_shaders_default(void)
 {
     static int s_def = -1;
-    if (s_def < 0) { int m = nv2a_vk_get_async_mode(); s_def = m >= 0 && m <= 3 ? m : 3; }
+    if (s_def < 0) { int m = nv2a_vk_get_async_mode(); s_def = m >= 0 && m < k_rv[RV_SHADERS].n ? m : k_rv[RV_SHADERS].n - 1; }
     return s_def;
 }
 
@@ -1491,6 +1498,7 @@ static int rv_index(int id)
     const char *cur = settings_get(k_rv[id].key, k_rv[id].def ? k_rv[id].def : "");
     int i;
     for (i = 0; i < k_rv[id].n; i++) if (!strcmp(cur, k_rv[id].val[i])) return i;
+    if (id == RV_SHADERS) return rv_shaders_default();             /* a value not offered here (iOS: hybrid) */
     for (i = 0; k_rv[id].def && i < k_rv[id].n; i++) if (!strcmp(k_rv[id].def, k_rv[id].val[i])) return i;
     return 0;
 }
@@ -2974,10 +2982,19 @@ static const char *opt_help_for(int view, uint32_t line)
     if (view == OPT_V_RECOMP) return k_recomp[line];
     if (view == OPT_V_FPS && line < 4) return k_fps[line];
     if (view == OPT_V_RENDERING)
+#if defined(ORTA_IOS_SCREEN)
+        return line == 0 ? "WAIT waits for a new shader,\nSKIP leaves the draw out until it is ready.\nLeft or right, Y for the default. At once."
+                         : "A small notice while shaders are built.\nLeft or right to change, Y for the default.\nApplies at once.";
+#else
         return line == 0 ? "HYBRID: a quick shader until the real one.\nWAIT waits, SKIP leaves the draw out.\nLeft or right, Y for the default. At once."
                          : "A small notice while shaders are built.\nLeft or right to change, Y for the default.\nApplies at once.";
+#endif
     if (view == OPT_V_BOOT)
+#if defined(ORTA_IOS_SCREEN)
+        return "Plays boot.mpg from the media folder\nat every start.\nLeft or right to change, Y for the default.";
+#else
         return "Plays media\\boot.mpg at every start.\nLeft or right to change, Y for the default.\nSee the README.";
+#endif
     if (view == OPT_V_TOP && line == 0) return "The practice missions: flying, aiming, dragon forms.\nPress A to start.";
     if (view == OPT_V_TOP && line == 2) return "Aiming, vibration and button mapping.\nPress A to open.";
 #if defined(ORTA_IOS_SCREEN)

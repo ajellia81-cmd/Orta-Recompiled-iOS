@@ -33,6 +33,7 @@
 #if TARGET_OS_IPHONE
 #define ORTA_IOS 1
 #include <SDL3/SDL_main.h>       /* iOS: SDL runs main() inside UIApplicationMain */
+#include <SDL3/SDL_locale.h>     /* iOS: the system language for LANGUAGE SYSTEM */
 #include <unistd.h>               /* access */
 #include "ios_app.h"             /* packaging/ios: SDL on the main thread, the touch controls, the game thread */
 #endif
@@ -127,6 +128,23 @@ int main(int argc, char **argv)
     settings_init(opt.save_dir);                   /* saves\settings.ini: RECOMP OPTIONS values (settings.h) */
 #if defined(ORTA_IOS)
     orta_ios_start();                              /* SDL video + pads on the main thread, the touch controls */
+    {
+        /* LANGUAGE SYSTEM = the iPhone's language: the toolkit reads it from LANG (xbox_settings.c), which an iOS
+         * app does not get - set from the system's first preferred language (2026-11-26) */
+        const char *l = getenv("LANG");
+        if (!l || !*l) {
+            int nloc = 0;
+            SDL_Locale **loc = SDL_GetPreferredLocales(&nloc);
+            if (loc && nloc > 0 && loc[0] && loc[0]->language) {
+                char v[32];
+                snprintf(v, sizeof v, "%s%s%s.UTF-8", loc[0]->language, loc[0]->country ? "_" : "",
+                         loc[0]->country ? loc[0]->country : "");
+                setenv("LANG", v, 1);
+                fprintf(stderr, "[IOS] system language: %s\n", v);
+            }
+            SDL_free(loc);
+        }
+    }
     /* first start: the picture fills the screen (the Lost World iOS port's rule) - on a phone "21:9" (shown as
      * SCREEN: the display's own ratio, 2.17 on an iPhone 18 Pro Max; toolkit kernel_xbox.c), the HUD at its edges
      * kept out of the safe area; on an iPad (about 4:3) 4:3. RECOMP OPTIONS > ASPECT RATIO changes it. */
