@@ -1012,10 +1012,6 @@ static int opt_set_add(int which, uint32_t key, int depth)
 
 /* x_lo..x_hi: the column filter of the move mode (labels / bar left of OPT_VALUE_X, values right of it). */
 static uint32_t s_walk_x_lo = 21, s_walk_x_hi = 639;
-/* diagnosis (2026-11-20, the right side's glints fly up from below when OPTIONS opens, fine in SOUND / RECOMP):
- * the words the screen's first layout moves right of x 400 - record id, place before and after */
-static int s_walk_log;
-static uint32_t s_walk_id, s_walk_line;
 
 /* A font's char table (sprite\Font\*_h_tbl.bin as loaded: header 0, 1, 0x1C, 0x1C, 0x200, then u16 glyph indices
  * per byte). Two neighbouring indices read as one "x | y << 16" word inside a row band - known issue #18: the walk
@@ -1033,26 +1029,6 @@ static int opt_shift_walk(uint32_t p, int depth, uint32_t old_y, int dy)
     int i, n = 0;
     if (depth > 3 || p < 0x00400000u || p >= 0x04000000u || !opt_set_add(0, p, depth)) return 0;
     if (opt_is_font_table(p)) return 0;
-    {
-        /* A groove path block: the keys the right side's glints run along, a run of position words reaching the
-         * screen's right edge (x 601..639). Moving the part of it inside a row band split the path between the
-         * band (parked at row 40+, y ~1800) and the rest: the glints flew up from below the screen (iPhone video
-         * 2026-11-20; [WALK] record 150: x 639 / 634 / 628, y 29 / 26 / 25). Cutting the walk at x 600 (b0c26ea)
-         * still moved the path's part left of 600 - more flying. Now such a block is never moved, whole. */
-        int edge = 0;
-        for (i = 0; i < 64 && edge < 2; i++) {
-            uint32_t v = GUEST32(p + 4 * (uint32_t)i), x = v & 0xFFFFu, y = v >> 16;
-            if (x > 600 && x < 640 && y < 480) edge++;
-        }
-        if (edge >= 2) {
-            if (s_walk_log > 0) {
-                s_walk_log--;
-                fprintf(stderr, "[WALK] line %u record %03X block %08X: groove path, left alone\n", s_walk_line,
-                        s_walk_id, p);
-            }
-            return 0;
-        }
-    }
     for (i = 0; i < 64; i++) {
         uint32_t a = p + 4 * (uint32_t)i, v = GUEST32(a), x = v & 0xFFFFu, y = v >> 16;
         /* below the row: +12 for the value column (volume dots' wave keys go to +8), only +5 left of it - the next
@@ -1060,11 +1036,6 @@ static int opt_shift_walk(uint32_t p, int depth, uint32_t old_y, int dy)
          * 20261104_103651_opt_bind1) */
         if (x > 20 && x < 640 && y + 26 >= old_y && y <= old_y + (x < 200u /* OPT_VALUE_X */ ? 5u : 12u) && y >= 20) {
             if (x >= s_walk_x_lo && x <= s_walk_x_hi && opt_set_add(1, a, 0)) {
-                if (s_walk_log > 0 && x >= 560u) {
-                    s_walk_log--;
-                    fprintf(stderr, "[WALK] line %u record %03X word %08X: x %u y %u -> %d\n", s_walk_line, s_walk_id, a,
-                            x, y, (int)y + dy);
-                }
                 GUEST32(a) = x | ((uint32_t)((int)y + dy) << 16); n++;
             }
         } else if (v >= 0x00400000u && v < 0x04000000u) {
@@ -1096,7 +1067,7 @@ static int opt_shift_line(int line, int from_row, int to_row, int mode)
     if (dy == 0) return 0;
     if (++s_gen == 0) s_gen = 1;   /* new generation = both sets empty */
     s_walk_x_lo = mode == OPT_MV_VALUE ? OPT_VALUE_X : 21u;
-    s_walk_x_hi = mode == OPT_MV_LABEL ? OPT_VALUE_X - 1u : 639u;   /* groove path blocks: opt_shift_walk */
+    s_walk_x_hi = mode == OPT_MV_LABEL ? OPT_VALUE_X - 1u : 639u;
     for (; n && guard < 4096; n = GUEST32(n + 0x18), guard++) {
         uint32_t id = GUEST32(n), data = GUEST32(n + 4), sib;
         int links;
@@ -1107,8 +1078,6 @@ static int opt_shift_line(int line, int from_row, int to_row, int mode)
          * other lines' bar records (0x0036BF00[]) are left out of this line's move. */
         for (b = 0; b < 9; b++) if (b != line && GUEST32(0x0036BF00u + 4 * (uint32_t)b) == id) other_bar = 1;
         if (other_bar) continue;
-        s_walk_id = id;
-        s_walk_line = (uint32_t)line;
         moved += opt_shift_walk(data, 0, y, dy);
         /* Sibling chain of sprite objects off the data block (+0x0C next, +0x10 prev; run
          * 20261104_065050_B_watchdots): a volume dot row is 11 such objects (x 380..580, step 20), each with its
@@ -2290,195 +2259,11 @@ static int s_hud_n;
 
 static float orta_qx(uint32_t va) { uint32_t b = GUEST32(va); float v; memcpy(&v, &b, 4); return v; }
 
-static int hud_in_play(void);
-extern void nv2a_vk_render_scale_get(double *kx, double *ky);
-/* The 2D on whole host pixels: the frame is rendered at a scale that is no whole number (iPhone: 4.48 x 2.946),
- * so a one-row line came out 2 or 3 host pixels thick depending on its row - the menu cursor lines differed from
- * item to item (2026-11-19). The way a 2D corner reaches the host: the XDK's screen-space program adds the viewport
- * bias 0.53125, the rasteriser truncates to 1/16 of a title pixel, the render scale's centre offset comes off
- * (toolkit nv2a_snap: off = 0.5 - 0.5 / k), times k. The first try rounded y * k and ignored bias and truncation:
- * the edges still fell 0.41..0.59 past a whole host pixel, on either side of a pixel centre (thickness unchanged,
- * build e65bf1f). Now each corner is placed so that the host edge after all of that is within 0.1 of a whole host
- * pixel: the title-space value on the 1/16 grid nearest to it, a 1/256 above so the truncation keeps it, and the
- * far edge a whole number of host pixels from the near one (the quad's size, rounded). The scale
- * is the surfaces' real one (whole host pixels: 640 -> 2868, 480 -> 1414). Scale 1: nothing. */
-#define ORTA_SNAP_BIAS 0.53125
-/* the host pixel edge a title coordinate lands on (rounded), and the title coordinate that lands on host edge t */
-static double orta_snap_t(double v, double k) { return floor((v + ORTA_SNAP_BIAS - (0.5 - 0.5 / k)) * k + 0.5); }
-static double orta_snap_v(double t, double k)
-{
-    double off = 0.5 - 0.5 / k, q = floor((t / k + off) * 16.0 + 0.5) / 16.0;
-    return q - ORTA_SNAP_BIAS + 1.0 / 256.0;
-}
-/* One axis of a quad: the low edge to its nearest host pixel, the high edge that many whole host pixels further
- * as the quad's size gives (rounded) - a one-row line is 3 host pixels at every row, not 3 here and 2 there. */
-static void orta_snap_axis(float *v, int n, double k)
-{
-    float lo = 1e30f, hi = -1e30f;
-    double tl, th;
-    int j;
-    for (j = 0; j < n; j++) { if (v[j] < lo) lo = v[j]; if (v[j] > hi) hi = v[j]; }
-    tl = orta_snap_t(lo, k);
-    th = tl + floor((double)(hi - lo) * k + 0.5);
-    for (j = 0; j < n; j++) {
-        if (v[j] == lo) v[j] = (float)orta_snap_v(tl, k);
-        else if (v[j] == hi) v[j] = (float)orta_snap_v(th, k);
-        else v[j] = (float)orta_snap_v(orta_snap_t(v[j], k), k);
-    }
-}
-static void hud_snap_quad(uint32_t vp)
-{
-    double kx, ky;
-    float x[4], y[4];
-    int j;
-    nv2a_vk_render_scale_get(&kx, &ky);
-    if (!(kx > 1.01 || ky > 1.01))
-        return;
-    kx = floor(640.0 * kx + 0.5) / 640.0;
-    ky = floor(480.0 * ky + 0.5) / 480.0;
-    for (j = 0; j < 4; j++) {
-        x[j] = orta_qx(vp + (uint32_t)j * 0x20u);
-        y[j] = orta_qx(vp + (uint32_t)j * 0x20u + 4u);
-        if (!(x[j] > -2000.0f && x[j] < 2000.0f && y[j] > -2000.0f && y[j] < 2000.0f))
-            return;                                     /* parked / hidden: left alone */
-    }
-    if (kx > 1.01) orta_snap_axis(x, 4, kx);
-    if (ky > 1.01) orta_snap_axis(y, 4, ky);
-    for (j = 0; j < 4; j++) {
-        uint32_t bx, by;
-        memcpy(&bx, &x[j], 4);
-        memcpy(&by, &y[j], 4);
-        GUEST32(vp + (uint32_t)j * 0x20u) = bx;
-        GUEST32(vp + (uint32_t)j * 0x20u + 4u) = by;
-    }
-}
-/* Options: the views park the lines they do not show far below the screen (row 40 + line, y ~1250 / 1846);
- * sparkle particles of a parked piece fly from there up to the part of it still on screen (TOP: line 0's value
- * box at row 0 - iPhone video 2026-11-19 19:05, a dot rising to the NORMAL box ~1 s after the screen opened; the
- * Xbox original has no such flight). History: keyed by record (aedbebc) hid the flight but also the groove glints
- * (they share one record, drawn many times a frame); by nearness (762eb56, 0ecae74) let the flight through; a
- * 45-row jump of a record drawn once a frame (3218e23) hid it frame by frame - frames with a smaller jump showed,
- * seen as flickering noise; that rule only in a 700 ms window (d9628a6) missed the flight, which comes later.
- * Now: a record drawn once a frame that jumps more than 45 rows is FLYING and stays hidden, frame after frame,
- * until it has moved at most 6 rows a frame three frames running (it landed). Records drawn more than once a frame
- * (the glints) are never touched. Options screen only, sprites up to 16 x 16. */
-static uint32_t s_opt_seen_ms;                 /* sub_000AF580 (the options screen's handler) last ran */
-static uint32_t s_opt_layout_ms;               /* opt_layout last ran (kept for the log) */
-#define ORTA_FLY_N 1024
-static struct { uint32_t arg; float x, y; } s_fly[2][ORTA_FLY_N];
-static int s_fly_n[2], s_fly_cur;
-static uint32_t s_fly_frame_ms;
-static void menu_flight_hide(uint32_t arg, uint32_t vp)
-{
-    static struct { uint32_t arg; float y; uint32_t t; uint8_t flying, calm; } seen[256];
-    static int s_fly_logged;
-    uint32_t now = (uint32_t)SDL_GetTicks(), b, hh;
-    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, off = -4096.0f, cx, cy, dy = -1.0f;
-    int j, i, k, count = 0, prev, slot = -1, hide = 0;
-    {
-        /* off since b0c26ea (2026-11-20): the flight's cause is gone (the walks leave the right-edge grooves alone),
-         * and this hiding made some glints vanish at once. ORTA_FLY_HIDE=1 turns it on again. */
-        static int on = -1;
-        if (on < 0) { const char *e = getenv("ORTA_FLY_HIDE"); on = e && *e == '1'; }
-        if (!on)
-            return;
-    }
-    if (now - s_opt_seen_ms > 200u)
-        return;
-    for (j = 0; j < 4; j++) {
-        float x = orta_qx(vp + (uint32_t)j * 0x20u), y = orta_qx(vp + (uint32_t)j * 0x20u + 4u);
-        if (x < x0) x0 = x;
-        if (x > x1) x1 = x;
-        if (y < y0) y0 = y;
-        if (y > y1) y1 = y;
-    }
-    if (!(x1 - x0 <= 16.0f && y1 - y0 <= 16.0f) || !(x0 > -2000.0f && x1 < 2000.0f && y0 > -2000.0f && y1 < 2000.0f))
-        return;
-    /* a new frame: the game thread emits a frame's sprites within a few ms; 8 ms of quiet starts the next list */
-    if (now - s_fly_frame_ms > 8u) {
-        s_fly_cur ^= 1;
-        s_fly_n[s_fly_cur] = 0;
-        if (now - s_fly_frame_ms > 100u)
-            s_fly_n[s_fly_cur ^ 1] = 0;
-    }
-    s_fly_frame_ms = now;
-    cx = 0.5f * (x0 + x1);
-    cy = 0.5f * (y0 + y1);
-    prev = s_fly_cur ^ 1;
-    for (i = 0; i < s_fly_n[prev]; i++)
-        if (s_fly[prev][i].arg == arg) count++;
-    for (i = 0; i < s_fly_n[s_fly_cur]; i++)
-        if (s_fly[s_fly_cur][i].arg == arg) count += 2;         /* already drawn this frame */
-    if (s_fly_n[s_fly_cur] < ORTA_FLY_N) {
-        i = s_fly_n[s_fly_cur]++;
-        s_fly[s_fly_cur][i].arg = arg;
-        s_fly[s_fly_cur][i].x = cx;
-        s_fly[s_fly_cur][i].y = cy;
-    }
-    hh = (arg >> 3) * 2654435761u >> 24;
-    for (k = 0; k < 8; k++) {
-        i = (int)((hh + (uint32_t)k) & 255u);
-        if (seen[i].arg == arg) { slot = i; break; }
-    }
-    if (slot < 0)
-        for (k = 0; k < 8; k++) {
-            i = (int)((hh + (uint32_t)k) & 255u);
-            if (seen[i].arg == 0 || now - seen[i].t > 1000u) {
-                slot = i;
-                seen[i].arg = arg; seen[i].y = cy; seen[i].t = now; seen[i].flying = 0; seen[i].calm = 0;
-                break;
-            }
-        }
-    if (slot < 0 || count > 1) {
-        if (slot >= 0) { seen[slot].flying = 0; seen[slot].y = cy; seen[slot].t = now; }
-        return;                                                   /* a multi record: the glints */
-    }
-    if (now - seen[slot].t <= 100u) {
-        dy = fabsf(cy - seen[slot].y);
-        if (dy > 45.0f) { seen[slot].flying = 1; seen[slot].calm = 0; }
-        else if (seen[slot].flying) {
-            if (dy <= 6.0f) { if (++seen[slot].calm >= 3) seen[slot].flying = 0; }
-            else seen[slot].calm = 0;
-        }
-    } else {
-        seen[slot].flying = 0;
-    }
-    seen[slot].y = cy;
-    seen[slot].t = now;
-    hide = seen[slot].flying;
-    if (hide) {
-        if (s_fly_logged < 60) {
-            s_fly_logged++;
-            fprintf(stderr, "[FLY] hidden: record %08X at %.1f,%.1f (%gx%g), %.1f rows this frame, %u ms after layout\n",
-                    arg, cx, cy, x1 - x0, y1 - y0, dy, now - s_opt_layout_ms);
-        }
-        memcpy(&b, &off, 4);
-        for (j = 0; j < 4; j++)
-            GUEST32(vp + (uint32_t)j * 0x20u) = b;
-    }
-}
-
 void sub_00069A90(RECOMP_PARAMS)
 {
     float f = orta_aspect_factor();
     uint32_t arg = GUEST32(g_esp + 4), vp0 = GUEST32(0x46F890u);
     ORTA_WS_SQUEEZE_CALL(sub_00069A90_gen);
-    if (GUEST32(0x46F890u) == vp0 + 0x80u) {
-        /* diagnosis (2026-11-19, cursor lines still of different thickness): thin bars through this emitter, their
-         * y before and after the snap; the toolkit's [THIN] lines show every thin bar drawn, whatever its path */
-        static int s_thin_n;
-        float ty0 = orta_qx(vp0 + 4u), ty2 = orta_qx(vp0 + 0x40u + 4u);
-        float tx0 = orta_qx(vp0), tx1 = orta_qx(vp0 + 0x20u);
-        int thin = s_thin_n < 40 && fabsf(ty2 - ty0) <= 4.0f && fabsf(tx1 - tx0) >= 24.0f;
-        hud_snap_quad(vp0);
-        if (thin) {
-            s_thin_n++;
-            fprintf(stderr, "[THIN2] record %08X x %.2f..%.2f y %.4f %.4f -> %.6f %.6f\n", arg, tx0, tx1, ty0, ty2,
-                    orta_qx(vp0 + 4u), orta_qx(vp0 + 0x40u + 4u));
-        }
-        if (!hud_in_play())
-            menu_flight_hide(arg, vp0);
-    }
     if (!(f > 0.0f) || !GUEST32(0x342754u) || (GUEST8(arg + 2u) & 8u) || GUEST32(0x345DD0u) == 1u)
         return;
     if (GUEST32(0x46F890u) == vp0 + 0x80u && s_hud_n < ORTA_HUD_MAXQ)
@@ -2486,129 +2271,12 @@ void sub_00069A90(RECOMP_PARAMS)
 }
 
 extern void sub_0006A520_gen(RECOMP_PARAMS);
-static uint32_t s_pause_seen_ms, s_hud_last_play;   /* sub_001B4BA0 (the pause menu) / hud_in_play */
-static int s_pause_from_play;
-/* In play? The HUD anchoring is for the play HUD (gauge, radar, lock-on counters); the menus, the title, the
- * episode screens and the results are laid out as a whole, and moving their side pieces tore them apart (the help
- * panel's MENU tab, list arrows, sliding titles - iPhone 18 Pro Max log 2026-11-19, 141 groups moved outside play).
- * Play = the player object (0x474230) with its section counter (+0x6C) running in the last 1.5 s (orta_cheat_thread:
- * it stands still in menus, the pause, cut scenes); the pause menu keeps the play layout while it is up, so the
- * gauge does not jump in behind it. ORTA_HUD_ANCHOR=all: everywhere (the maintainer's rule). */
-static int hud_in_play(void)
-{
-    static int all = -1;
-    static uint32_t last_sec, last_change;
-    uint32_t now = (uint32_t)SDL_GetTicks(), p = GUEST32(0x474230u);
-    if (all < 0) {
-        const char *e = getenv("ORTA_HUD_ANCHOR");
-        all = e && !strcmp(e, "all");
-    }
-    if (all)
-        return 1;
-    if (p >= 0x10000u && p <= 0x3FF0000u) {
-        uint32_t sec = GUEST32(p + 0x06Cu);
-        if (sec != last_sec) {
-            last_sec = sec;
-            last_change = now;
-        }
-        if (now - last_change < 1500u) {
-            s_hud_last_play = now;
-            return 1;
-        }
-    }
-    /* the pause menu over play (its handler ran in the last 0.2 s, and it opened during play) */
-    return now - s_pause_seen_ms < 200u && s_pause_from_play;
-}
-static uint32_t s_hud_batch;                       /* batches drawn so far (the log tells neighbours apart) */
-static int hud_log_on(void)
-{
-    static int on = -1;
-    if (on < 0) {
-        const char *e = getenv("ORTA_HUD_LOG");
-#if defined(ORTA_IOS_SCREEN)
-        on = !(e && *e == '0');
-#else
-        on = e && *e == '1';
-#endif
-    }
-    return on;
-}
-/* Outside play, wider than 16:9: the 2D is cut at the 16:9 picture's edges (fb 320 -+ (320 x 4/3) / f, where the
- * menus' backdrop ends). On a 16:9 TV everything past them is off the screen; here the side bars showed it - the
- * menu cursor's line sweeping in from beyond the right edge (iPhone 18 Pro Max video 2026-11-19). Quads wholly
- * outside are moved off the screen; quads across an edge are cut there with their texture coordinates (an
- * axis-aligned sprite: 2 x values, u per x the same - vertex = x y z rhw diffuse specular u v, 0x20 bytes; anything
- * else is left as it is). */
-static void hud_clip_16x9(int n, uint32_t lo, uint32_t hi, float f)
-{
-    float half = (320.0f * 4.0f / 3.0f) / f, L = 320.0f - half, R = 320.0f + half;
-    int i, j;
-    for (i = 0; i < n; i++) {
-        uint32_t va = s_hud_q[i], b;
-        float x[4], u[4], xl = 1e30f, xr = -1e30f, ul = 0.0f, ur = 0.0f, nl, nr;
-        int ok = 1, hl = 0, hr = 0;
-        if (va < lo || va + 0x80u > hi)
-            continue;
-        for (j = 0; j < 4; j++) {
-            x[j] = orta_qx(va + (uint32_t)j * 0x20u);
-            u[j] = orta_qx(va + (uint32_t)j * 0x20u + 0x18u);
-            if (!(x[j] > -4000.0f && x[j] < 4000.0f))
-                ok = 0;
-            if (x[j] < xl) xl = x[j];
-            if (x[j] > xr) xr = x[j];
-        }
-        if (!ok || (xl >= L && xr <= R))
-            continue;
-        {
-            /* small pieces (the grooves' glints, up to 16 x 16) are left whole: cut at the edge they vanished at
-             * once instead of fading along their groove (iPhone 2026-11-20) */
-            float yl = 1e30f, yh = -1e30f, yy;
-            for (j = 0; j < 4; j++) {
-                yy = orta_qx(va + (uint32_t)j * 0x20u + 4u);
-                if (yy < yl) yl = yy;
-                if (yy > yh) yh = yy;
-            }
-            if (xr - xl <= 16.0f && yh - yl <= 16.0f)
-                continue;
-        }
-        if (xr <= L || xl >= R) {                    /* wholly outside: off the screen */
-            float off = -4096.0f;
-            memcpy(&b, &off, 4);
-            for (j = 0; j < 4; j++)
-                GUEST32(va + (uint32_t)j * 0x20u) = b;
-            continue;
-        }
-        for (j = 0; j < 4; j++) {
-            if (!(u[j] > -64.0f && u[j] < 64.0f)) ok = 0;
-            if (fabsf(x[j] - xl) < 0.01f) { if (hl && fabsf(u[j] - ul) > 1e-5f) ok = 0; ul = u[j]; hl = 1; }
-            else if (fabsf(x[j] - xr) < 0.01f) { if (hr && fabsf(u[j] - ur) > 1e-5f) ok = 0; ur = u[j]; hr = 1; }
-            else ok = 0;
-        }
-        if (!ok || !hl || !hr || xr - xl < 0.01f)
-            continue;
-        nl = xl < L ? L : xl;
-        nr = xr > R ? R : xr;
-        for (j = 0; j < 4; j++) {
-            float nx = fabsf(x[j] - xl) < 0.01f ? nl : nr, nu = ul + (ur - ul) * (nx - xl) / (xr - xl);
-            memcpy(&b, &nx, 4);
-            GUEST32(va + (uint32_t)j * 0x20u) = b;
-            memcpy(&b, &nu, 4);
-            GUEST32(va + (uint32_t)j * 0x20u + 0x18u) = b;
-        }
-    }
-}
-
 void sub_0006A520(RECOMP_PARAMS)
 {
     float f = orta_aspect_factor();
     int n = s_hud_n, i, j;
     uint32_t lo = GUEST32(0x46F894u), hi = GUEST32(0x46F890u);
     s_hud_n = 0;
-    s_hud_batch++;
-    /* outside flight, wider than 16:9: the 2D cut at the 16:9 picture's edges (iOS, the menu cursor line sweeping in
-     * from beyond the right edge, 2026-11-19) */
-    if (f > 4.0f / 3.0f + 0.01f && n > 0 && !s_in_flight)
-        hud_clip_16x9(n, lo, hi, f);
     orta_menu_buttons_tick();                    /* every frame with 2D, menus and flight (not only at pad reads) */
     /* GitHub #4 (2026-11-15): only in flight. The menus draw through the same sprite layer, and the move tore
      * them apart - at 16:10 CONTROLS stepped right out of the OPTIONEN column, at 21:9 CONTROLS and the help box
@@ -2619,12 +2287,6 @@ void sub_0006A520(RECOMP_PARAMS)
         static uint32_t bq[ORTA_HUD_MAXQ];
         float s16 = 0.75f * f;                       /* fb px -> 16:9 layout px (0.75 / q, q = 1 / f) */
         float k = 4.0f / (3.0f * f), dmove = 320.0f * (1.0f - k);
-        {
-            double kx_, ky_;                         /* the move on whole host pixels too (hud_snap_quad) */
-            nv2a_vk_render_scale_get(&kx_, &ky_);
-            if (kx_ > 1.01)
-                dmove = (float)(floor((double)dmove * kx_ + 0.5) / kx_);
-        }
         int m = 0;
         for (i = 0; i < n; i++) {                    /* this batch's quads only, sorted by x0 (insertion) */
             uint32_t va = s_hud_q[i];
@@ -3118,7 +2780,6 @@ static void opt_line_text(int line, const char *t)
 static void opt_layout(int view)
 {
     int line, moved = 0;
-    s_opt_layout_ms = (uint32_t)SDL_GetTicks();         /* the flight hiding's window (menu_flight_hide) */
     s_opt_view = view;
     s_opt_hidden = 0;
     for (line = 0; line < 9; line++) {                       /* 1: labels and values to their own parking rows */
@@ -3184,9 +2845,7 @@ static void opt_apply_view(void)
     for (line = 0; line < 9; line++) s_live_row[line] = 0;
     s_live_sel = 0; s_live_sel_line = 99;
     for (line = 0; line < 9; line++) s_opt_row[line] = s_opt_vrow[line] = line;
-    s_walk_log = 150;
     opt_layout(OPT_V_TOP);
-    s_walk_log = 0;
     s_opt_need_cursor = 1;
 }
 
@@ -3404,12 +3063,6 @@ void sub_000AF580(RECOMP_PARAMS)
     uint32_t obj = g_ecx, bits = obj ? GUEST32(obj + 0x18) : 0, cur;
     uint32_t move = bits & (0x01000000u | 0x02000000u);
     int k;
-    {
-        uint32_t now_ = (uint32_t)SDL_GetTicks();
-        if (now_ - s_opt_seen_ms > 200u)
-            s_opt_layout_ms = now_;          /* the screen's first frames: the flight window starts here too */
-        s_opt_seen_ms = now_;
-    }
     if (!obj || !opt_views_on()) { sub_000AF580_gen(ctx, base); return; }
     {
         uint32_t d = opt_label_data();
@@ -3517,11 +3170,9 @@ void sub_000AF580(RECOMP_PARAMS)
         /* 0x04000000 = LEFT, 0x08000000 = RIGHT (run 20261104_090544_opt_views14: a scripted left arrived as
          * 0x44004000; down = 0x22002000, B = 0x00000002) */
         int dir = (bits & 0x08000000u) ? 1 : -1;
-        uint64_t t0_ = SDL_GetTicksNS(), t1_;        /* the change's cost in the log (sound broke at changes) */
         GUEST32(obj + 0x18) = bits & ~(0x08000000u | 0x04000000u);   /* not the stock line's own value */
         g_ecx = obj;
         sub_000AF580_gen(ctx, base);
-        t1_ = SDL_GetTicksNS();
         if (s_opt_view == OPT_V_BIND) { if (bind_lr(cur, dir)) opt_view_texts(OPT_V_BIND); }
         else if (rv_step(s_opt_view, (int)cur, dir)) {
             char buf[48];
@@ -3533,8 +3184,7 @@ void sub_000AF580(RECOMP_PARAMS)
                 opt_view_texts(s_opt_view);                   /* RENDER RESOLUTION lists the new aspect's sizes */
             else
                 opt_line_text((int)cur, buf);                 /* SetText on its instances at the next call */
-            fprintf(stderr, "[OPT] view %d line %u -> %s (stock handler %.1f ms, ours %.1f ms) at %llu ms\n", s_opt_view,
-                    cur, buf, (t1_ - t0_) / 1e6, (SDL_GetTicksNS() - t1_) / 1e6, (unsigned long long)SDL_GetTicks());
+            fprintf(stderr, "[OPT] view %d line %u -> %s\n", s_opt_view, cur, buf);
         }
         GUEST32(obj + 0x18) = bits;
         return;
@@ -3723,26 +3373,14 @@ static void mm_register(void)
         else if (!mm_record_text(GUEST32(0x0036E6D8u + 4u * (uint32_t)line), s_mm_text[r], sizeof s_mm_text[r]))
             s_mm_text[r][0] = 0;
         fprintf(stderr, "[MENU] row %d = line %d \"%s\"\n", r, line, s_mm_text[r]);
-        {
-            /* which cursor-row record is the line (2026-11-19 diagnosis): their own stock texts */
-            char a62c[48], a618[48];
-            if (!mm_record_text(GUEST32(0x0036E62Cu + 4u * (uint32_t)r), a62c, sizeof a62c)) strcpy(a62c, "(none)");
-            if (!mm_record_text(GUEST32(0x0036E618u + 4u * (uint32_t)r), a618, sizeof a618)) strcpy(a618, "(none)");
-            fprintf(stderr, "[MENU]   records: 62C %08X \"%s\", 618 %08X \"%s\"\n", GUEST32(0x0036E62Cu + 4u * (uint32_t)r),
-                    a62c, GUEST32(0x0036E618u + 4u * (uint32_t)r), a618);
-        }
     }
     for (r = 0; r < MM_ROWS; r++) {
         if (k_mm_line[r] == r || !s_mm_text[r][0]) continue;   /* PANDORAS BÜCHSE stays where it is */
         opt_settext_set(GUEST32(0x0036E6D8u + 4u * (uint32_t)r), s_mm_text[r]);
         opt_settext_set(GUEST32(0x0036E6B0u + 4u * (uint32_t)r), s_mm_text[r]);
-        /* the cursor row's own sprites (sub_000BF900: 0x36E62C / 0x36E618 on the cursor row, 0x36E604 elsewhere).
-         * 0x36E618 not (2026-11-19, iPhone: the cursor line under every moved row came out magnified - thicker and
-         * longer - and only PANDORA'S BOX, the one row without our SetText, was right): taken as the line's record,
-         * it keeps its stock look. ORTA_MM_SETTEXT_618=1 brings the old way back. */
+        /* the cursor row's own sprites (sub_000BF900: 0x36E62C / 0x36E618 on the cursor row, 0x36E604 elsewhere) */
         opt_settext_set(GUEST32(0x0036E62Cu + 4u * (uint32_t)r), s_mm_text[r]);
-        if (getenv("ORTA_MM_SETTEXT_618"))
-            opt_settext_set(GUEST32(0x0036E618u + 4u * (uint32_t)r), s_mm_text[r]);
+        opt_settext_set(GUEST32(0x0036E618u + 4u * (uint32_t)r), s_mm_text[r]);
     }
     s_mm_reg = 1;
 }
@@ -4276,12 +3914,6 @@ static int pm_on(void)
 void sub_001B4BA0(RECOMP_PARAMS)
 {
     uint32_t obj = g_ecx;
-    {
-        uint32_t now = (uint32_t)SDL_GetTicks();     /* the HUD anchoring keeps the play layout behind the pause */
-        if (now - s_pause_seen_ms > 500u)
-            s_pause_from_play = s_hud_last_play && now - s_hud_last_play < 3000u;
-        s_pause_seen_ms = now;
-    }
     static uint32_t last_st = 99;
     uint32_t st = obj ? GUEST32(obj + 0x134) : 0;
     s_pause_ms = (uint32_t)SDL_GetTicks() | 1u;   /* MENU BUTTONS / HUD move: the pause is a menu */
