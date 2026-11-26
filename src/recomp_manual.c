@@ -2642,92 +2642,26 @@ void sub_0006A520(RECOMP_PARAMS)
             bx0[j] = a; bx1[j] = b; bq[j] = va;
             m++;
         }
-        {
-            /* groups: next quad starts within 32 px of the group's right end. Groups that stay (centre, or wider than
-             * 60 %: a panel) are remembered for 100 ms - other textures draw in other batches, before or after: a
-             * small group at the side (<= 64 px) that touches one of them (overlapping rows, within the same 32 px)
-             * belongs to it and stays too. The menus' help panel: its MENU tab label and the "(" of the text (glyphs of another
-             * texture) jumped off to the left (iOS SCREEN aspect, 2026-11-19; at 21:9 on PC as well). */
-            static struct { float x0, x1, y0, y1; uint32_t t; } keep[64];
-            static int nkeep, kslot;
-            static float gx0[ORTA_HUD_MAXQ], gx1[ORTA_HUD_MAXQ], gy0[ORTA_HUD_MAXQ], gy1[ORTA_HUD_MAXQ];
-            static float gd[ORTA_HUD_MAXQ];
-            static int gi[ORTA_HUD_MAXQ + 1];
-            uint32_t now = (uint32_t)SDL_GetTicks();
-            int play = 1;                            /* only in flight (s_in_flight, upstream v1.3.0) */
-            float gap = 32.0f / s16;                 /* 32 px of the 16:9 layout in frame pixels */
-            int ng = 0, g, w;
-            for (i = 0; i < m; i = j) {
-                float g1 = bx1[i], y0 = 1e30f, y1 = -1e30f, c16;
+        for (i = 0; i < m;) {                        /* groups: next quad starts within 32 px of the group's right end */
+            float g0 = bx0[i], g1 = bx1[i], d = 0.0f, c16;
+            for (j = i + 1; j < m && (bx0[j] - g1) * s16 <= 32.0f; j++)
+                if (bx1[j] > g1) g1 = bx1[j];
+            c16 = 320.0f + (0.5f * (g0 + g1) - 320.0f) * s16;
+            if ((g1 - g0) * s16 <= 384.0f) {
+                if (c16 < 640.0f / 3.0f) d = -dmove;
+                else if (c16 > 1280.0f / 3.0f) d = dmove;
+            }
+            if (d != 0.0f) {
                 int t, v;
-                for (j = i + 1; j < m && (bx0[j] - g1) * s16 <= 32.0f; j++)
-                    if (bx1[j] > g1) g1 = bx1[j];
                 for (t = i; t < j; t++)
                     for (v = 0; v < 4; v++) {
-                        float y = orta_qx(bq[t] + (uint32_t)v * 0x20u + 4u);
-                        if (y < y0) y0 = y;
-                        if (y > y1) y1 = y;
+                        uint32_t va = bq[t] + (uint32_t)v * 0x20u, b;
+                        float x = orta_qx(va) + d;
+                        memcpy(&b, &x, 4);
+                        GUEST32(va) = b;
                     }
-                gx0[ng] = bx0[i]; gx1[ng] = g1; gy0[ng] = y0; gy1[ng] = y1; gi[ng] = i;
-                c16 = 320.0f + (0.5f * (bx0[i] + g1) - 320.0f) * s16;
-                gd[ng] = 0.0f;
-                /* (bounds out of +-2000: NaN / unset vertices, a group of nothing - left alone) */
-                if (play && bx0[i] > -2000.0f && g1 < 2000.0f && (g1 - bx0[i]) * s16 <= 384.0f) {
-                    if (c16 < 640.0f / 3.0f) gd[ng] = -dmove;
-                    else if (c16 > 1280.0f / 3.0f) gd[ng] = dmove;
-                }
-                if (gd[ng] == 0.0f) {                /* stays: remembered */
-                    keep[kslot].x0 = bx0[i]; keep[kslot].x1 = g1; keep[kslot].y0 = y0; keep[kslot].y1 = y1;
-                    keep[kslot].t = now;
-                    kslot = (kslot + 1) % 64;
-                    if (nkeep < 64) nkeep++;
-                }
-                ng++;
             }
-            gi[ng] = m;
-            for (g = 0; g < ng; g++) {
-                float d = gd[g];
-                /* only small pieces (a label, a glyph: <= 64 px of the 16:9 layout) - the gauge and the radar stay
-                 * anchored even beside a centred subtitle */
-                if ((gx1[g] - gx0[g]) * s16 > 64.0f)
-                    w = nkeep;
-                else
-                    w = 0;
-                for (; d != 0.0f && w < nkeep; w++)
-                    if (now - keep[w].t <= 100u && gx0[g] < keep[w].x1 + gap && gx1[g] > keep[w].x0 - gap
-                        && gy0[g] < keep[w].y1 && gy1[g] > keep[w].y0)
-                        d = 0.0f;
-                if (gd[g] != 0.0f && hud_log_on()) {
-                    /* ORTA_HUD_LOG (on in the iOS build for now, 2026-11-19): every side group, once per place, so a
-                     * walk through the menus lists what the anchoring moves - 16:9 layout px, rows in frame px */
-                    static uint32_t seen[512];
-                    static int nseen, nlines;
-                    uint32_t key = ((uint32_t)(gx0[g] * 0.25f) & 0xFFu) | (((uint32_t)(gx1[g] * 0.25f) & 0xFFu) << 8)
-                                   | (((uint32_t)(gy0[g] * 0.25f) & 0xFFu) << 16) | ((uint32_t)(gi[g + 1] - gi[g]) << 24)
-                                   | (d != 0.0f ? 0x80000000u : 0u);
-                    int q, dup = 0;
-                    for (q = 0; q < nseen; q++)
-                        if (seen[q] == key) { dup = 1; break; }
-                    if (!dup && nlines < 400) {
-                        if (nseen < 512) seen[nseen++] = key;
-                        nlines++;
-                        fprintf(stderr, "[HUD] %s x %.0f..%.0f (16:9 %.0f..%.0f) rows %.0f..%.0f, %d quad(s), batch %u\n",
-                                d != 0.0f ? (d < 0.0f ? "to the left " : "to the right") : "kept (touches a staying group)",
-                                gx0[g], gx1[g], 320.0f + (gx0[g] - 320.0f) * s16, 320.0f + (gx1[g] - 320.0f) * s16,
-                                gy0[g], gy1[g], gi[g + 1] - gi[g], s_hud_batch);
-                    }
-                }
-                if (d != 0.0f) {
-                    int t, v;
-                    for (t = gi[g]; t < gi[g + 1]; t++)
-                        for (v = 0; v < 4; v++) {
-                            uint32_t va = bq[t] + (uint32_t)v * 0x20u, b;
-                            float x = orta_qx(va) + d;
-                            memcpy(&b, &x, 4);
-                            GUEST32(va) = b;
-                        }
-                }
-            }
+            i = j;
         }
     }
     sub_0006A520_gen(ctx, base);
