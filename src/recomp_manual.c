@@ -613,7 +613,17 @@ static void orta_menu_buttons_tick(void)
     if (ok) sec = GUEST32(p + 0x06Cu);
     if (sec != s_flight_sec) { s_flight_sec = sec; }
     s_flight_ms = s_hud_ms;
-    menu = !(s_hud_ms && now - s_hud_ms < 200u && (!s_pause_ms || now - s_pause_ms >= 200u));
+    {
+        /* iOS (2026-11-26): the gauge drawer (sub_0002F040) runs on another thread and can stamp s_hud_ms a
+         * millisecond after `now` was taken: now - s_hud_ms wrapped to ~4e9 >= 200 and read as "menu" - flight /
+         * menu flipped every few frames, and the HUD jumped between the screen's edges and the 16:9 places (iPhone
+         * video, log 46e920cb: 64 flips in seconds). Signed differences: a stamp just after `now` is age 0. */
+        uint32_t h = s_hud_ms, pm = s_pause_ms;
+        int32_t ha = (int32_t)(now - h), pa = (int32_t)(now - pm);
+        if (ha < 0) ha = 0;
+        if (pa < 0) pa = 0;
+        menu = !(h && ha < 200 && (!pm || pa >= 200));
+    }
     if (s_in_flight != !menu) {
         static unsigned s_flight_logs;
         if (s_flight_logs++ < 64u)
