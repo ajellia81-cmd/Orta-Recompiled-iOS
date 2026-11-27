@@ -1,0 +1,31 @@
+name: private-job
+# Runs a job script kept in the private repository. Its inputs, output and log stay there;
+# nothing from it is printed here or stored in this public repository.
+on:
+  workflow_dispatch:
+    inputs:
+      job: { description: "folder in the private repo", required: true }
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tools
+        run: |
+          sudo apt-get update -qq >/dev/null && sudo apt-get install -y -qq xdelta3 cmake zip >/dev/null
+          pip install -q gdown >/dev/null
+          git clone -q --depth 1 https://github.com/XboxDev/extract-xiso /tmp/xiso
+          cmake -S /tmp/xiso -B /tmp/xiso/b >/dev/null && cmake --build /tmp/xiso/b -j >/dev/null
+          sudo cp /tmp/xiso/b/extract-xiso /usr/local/bin/
+      - name: Run
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          JOB: ${{ inputs.job }}
+        run: |
+          P=${{ github.repository }}-private
+          git clone -q "https://x-access-token:$GH_TOKEN@github.com/$P" /tmp/p
+          sudo mkdir -p /mnt/w && sudo chmod 777 /mnt/w
+          st=0; bash "/tmp/p/$JOB/run.sh" "/tmp/p/$JOB" || st=1
+          gh release view "$JOB" -R "$P" >/dev/null 2>&1 || gh release create "$JOB" -R "$P" --title "$JOB" --notes "private" >/dev/null
+          for f in /mnt/w/*.zip /mnt/w/log.txt; do [ -f "$f" ] && gh release upload "$JOB" "$f" -R "$P" --clobber >/dev/null; done
+          rm -rf /mnt/w /tmp/p
+          exit $st
