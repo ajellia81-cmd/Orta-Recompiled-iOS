@@ -118,6 +118,59 @@ int orta_game_main(int argc, char **argv);
 #endif
 static int orta_run(void *opt_ptr);
 
+#if defined(ORTA_IOS)
+#include <dirent.h>
+#include <sys/stat.h>
+#include <errno.h>
+/* game/patch/ (2026-11-27): files dropped there through the Files app (same folder layout as game/, e.g.
+ * patch/sprite/Font/Zenkaku_Menu.txb) replace the game's files at the next start - the Files app cannot merge a
+ * folder into game/, it would replace the whole folder. The file each one replaces is kept in game/patch_backup/
+ * (only the first time, so it stays the disc's); copying patch_backup/ back the same way restores the disc.
+ * patch/ is removed once it is applied. Used for the fan Korean patch; files only, nothing is fetched. */
+static int ios_mkdirs(char *path)                   /* the folders above path */
+{
+    char *q;
+    for (q = path + 1; *q; q++)
+        if (*q == '/') { *q = 0; if (mkdir(path, 0755) && errno != EEXIST) { *q = '/'; return 0; } *q = '/'; }
+    return 1;
+}
+static void ios_patch_walk(const char *game, const char *rel, int *n, int *bad)
+{
+    char dir[HOST_PATH_MAX];
+    DIR *d;
+    struct dirent *e;
+    snprintf(dir, sizeof dir, "%s/patch%s%s", game, *rel ? "/" : "", rel);
+    if (!(d = opendir(dir))) return;
+    while ((e = readdir(d))) {
+        char r[HOST_PATH_MAX], src[HOST_PATH_MAX], dst[HOST_PATH_MAX], bak[HOST_PATH_MAX];
+        struct stat st;
+        if (e->d_name[0] == '.') continue;
+        snprintf(r, sizeof r, "%s%s%s", rel, *rel ? "/" : "", e->d_name);
+        snprintf(src, sizeof src, "%s/patch/%s", game, r);
+        if (stat(src, &st)) continue;
+        if (S_ISDIR(st.st_mode)) { ios_patch_walk(game, r, n, bad); rmdir(src); continue; }
+        snprintf(dst, sizeof dst, "%s/%s", game, r);
+        snprintf(bak, sizeof bak, "%s/patch_backup/%s", game, r);
+        if (!ios_mkdirs(dst)) { (*bad)++; continue; }
+        if (access(dst, F_OK) == 0 && access(bak, F_OK) != 0 && (!ios_mkdirs(bak) || rename(dst, bak))) { (*bad)++; continue; }
+        if (rename(src, dst)) { (*bad)++; continue; }
+        (*n)++;
+    }
+    closedir(d);
+}
+static void orta_ios_apply_patch_folder(const char *game)
+{
+    char p[HOST_PATH_MAX];
+    int n = 0, bad = 0;
+    snprintf(p, sizeof p, "%s/patch", game);
+    if (access(p, F_OK) != 0) return;
+    ios_patch_walk(game, "", &n, &bad);
+    if (!bad) rmdir(p);
+    printf("[IOS] patch folder: %d files applied%s\n", n, bad ? ", some failed (left in patch/)" : "");
+    fflush(stdout);
+}
+#endif
+
 int main(int argc, char **argv)
 {
     HostOptions opt;
@@ -283,6 +336,7 @@ int main(int argc, char **argv)
     }
 #endif
 #if defined(ORTA_IOS)
+    orta_ios_apply_patch_folder(opt.game_dir);
     /* iOS: from here on the title runs on a thread of its own (16 MB stack); the main thread stays in UIKit's run
      * loop pumping SDL's events, which the NV2A thread's window needs (toolkit nv2a_vk.c, XR_VK_IOS) */
     return orta_ios_run_game(orta_run, &opt);
@@ -306,6 +360,38 @@ static int orta_run(void *opt_ptr)
         host_fatal("Cannot read game/default.xbe - put the game's disc image (.iso) or its extracted files into "
                    "the game folder.");
         return 1;
+    }
+    /* Optional text patch for the XBE's own strings (2026-11-27, the fan Korean patch: pause menu, save dialogs):
+     * game/xbe_patch.bin = "ORXP", u32 count, then per entry u32 file offset, u32 length, the original bytes, the
+     * new bytes (little endian). Applied to the copy in memory before the layout maps it, and only when every
+     * entry's original bytes match - default.xbe on disk stays untouched (its SHA-1 is the version check). The
+     * patch file is not part of this project; without it nothing changes. */
+    {
+        char pp[HOST_PATH_MAX];
+        size_t pn = 0;
+        uint8_t *pb;
+        snprintf(pp, sizeof pp, "%s/xbe_patch.bin", opt.game_dir);
+        pb = (uint8_t *)host_read_file(pp, &pn);
+        if (pb) {
+            uint32_t n = 0, i, ok = pn >= 8 && !memcmp(pb, "ORXP", 4);
+            size_t at = 8, pass;
+            if (ok)
+                memcpy(&n, pb + 4, 4);
+            for (pass = 0; ok && pass < 2; pass++) {        /* pass 0: check every entry, pass 1: write */
+                for (i = 0, at = 8; ok && i < n; i++) {
+                    uint32_t off, len;
+                    if (at + 8 > pn) { ok = 0; break; }
+                    memcpy(&off, pb + at, 4); memcpy(&len, pb + at + 4, 4); at += 8;
+                    if (at + 2ull * len > pn || (uint64_t)off + len > xbe_size) { ok = 0; break; }
+                    if (pass == 0 && memcmp((uint8_t *)xbe + off, pb + at, len)) ok = 0;
+                    if (pass == 1) memcpy((uint8_t *)xbe + off, pb + at + len, len);
+                    at += 2u * len;
+                }
+            }
+            printf("[ORTA] xbe_patch.bin: %s (%u entries)\n", ok ? "applied" : "does not match this default.xbe, skipped", n);
+            fflush(stdout);
+            free(pb);
+        }
     }
     /* 128 MB of guest RAM (the debug kit's size; toolkit XBOX_DEVKIT_RAM) instead of 64: the guest heap ran out at
      * the end of episode 3 - the closing cut scene asks for 10 MB, the heap's high mark stood at 45.7 of 48.5 MB
