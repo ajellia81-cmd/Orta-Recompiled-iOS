@@ -4076,42 +4076,37 @@ static int opt_clone_label(uint32_t tmpl_id, uint32_t new_id, const char *text, 
 /* ── Subtitle glyph trace (diagnostic, 2026-11-27): Japanese/Korean subtitle lines show their first characters
  * out of place on the port ("ヴ エ レーン" for "エヴレーン", original Japanese text too). sub_001C0840 lays out one
  * glyph (x = pen [this+0x34] centred in the cell) and hands it to the sprite list sub_001BFAA0 as sprite
- * 0x20A + counter. Logged per sprite id only when its code or position changes (the text is redrawn every frame),
- * so whole lines show once: code / pen / sprite id / x / y. Language JAPANESE only, up to 4000 lines;
- * ORTA_GLYPH_LOG=0 turns it off. */
+ * 0x20A + counter. These log code / pen / sprite id / x / y for each glyph so the layout can be told apart
+ * from the drawing. Language JAPANESE only, first 400 glyphs; ORTA_GLYPH_LOG=0 turns it off. */
 extern void sub_001C0840_gen(RECOMP_PARAMS);
 extern void sub_001BFAA0_gen(RECOMP_PARAMS);
 static int s_glyph_log = -1, s_glyph_n;
-static uint32_t s_glyph_code, s_glyph_pen, s_glyph_last[1024];
 static int glyph_log_on(void)
 {
     if (s_glyph_log < 0) {
         const char *e = getenv("ORTA_GLYPH_LOG");
         s_glyph_log = !(e && *e == '0') && xbox_settings()->language == XBOX_LANG_JAPANESE;
     }
-    return s_glyph_log && s_glyph_n < 4000;
+    return s_glyph_log && s_glyph_n < 400;
 }
 void sub_001C0840(RECOMP_PARAMS)
 {
     if (glyph_log_on()) {
-        s_glyph_code = (GUEST32(g_esp + 4) << 16) | (GUEST32(g_esp + 8) & 0xFFFFu);
-        s_glyph_pen = GUEST32(g_ecx + 0x34);
+        uint32_t self = g_ecx;
+        fprintf(stderr, "[GLYPH] draw type=%u code=%04X alpha=%u pen=%d,%d flags=%X\n", GUEST32(g_esp + 4),
+                GUEST32(g_esp + 8) & 0xFFFFu, GUEST32(g_esp + 12) & 0xFFu, (int32_t)GUEST32(self + 0x34),
+                (int32_t)GUEST32(self + 0x38), GUEST32(self + 0x28));
+        s_glyph_n++;
     }
     sub_001C0840_gen(ctx, base);
 }
 void sub_001BFAA0(RECOMP_PARAMS)
 {
     if (glyph_log_on() && GUEST32(g_esp) == 0x001C0989u) {
-        uint32_t id = GUEST32(g_esp + 4), xa = GUEST32(g_esp + 12), ya = GUEST32(g_esp + 16);
-        uint32_t key = s_glyph_code * 2654435761u ^ xa ^ (ya << 7);
+        uint32_t xa = GUEST32(g_esp + 12), ya = GUEST32(g_esp + 16);
         float x, y;
         memcpy(&x, &xa, 4); memcpy(&y, &ya, 4);
-        if (s_glyph_last[id & 1023] != key) {
-            s_glyph_last[id & 1023] = key;
-            s_glyph_n++;
-            fprintf(stderr, "[GLYPH] id=%X type=%u code=%04X pen=%d x=%.1f y=%.1f\n", id, s_glyph_code >> 16,
-                    s_glyph_code & 0xFFFFu, (int32_t)s_glyph_pen, x, y);
-        }
+        fprintf(stderr, "[GLYPH] sprite id=%X a2=%X x=%.1f y=%.1f\n", GUEST32(g_esp + 4), GUEST32(g_esp + 8), x, y);
     }
     sub_001BFAA0_gen(ctx, base);
 }
