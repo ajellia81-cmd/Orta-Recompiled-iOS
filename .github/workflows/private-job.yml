@@ -27,5 +27,5 @@ jobs:
           st=0; bash "/tmp/p/$JOB/run.sh" "/tmp/p/$JOB" || st=1
           gh release view "$JOB" -R "$P" >/dev/null 2>&1 || gh release create "$JOB" -R "$P" --title "$JOB" --notes "private" >/dev/null
           for f in /mnt/w/*.zip /mnt/w/log.txt; do [ -f "$f" ] && gh release upload "$JOB" "$f" -R "$P" --clobber >/dev/null; done
-          rm -rf /mnt/w /tmp/p
+          sudo rm -rf /mnt/w /tmp/p
           exit $st
