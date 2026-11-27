@@ -126,7 +126,7 @@ static int orta_run(void *opt_ptr);
  * patch/sprite/Font/Zenkaku_Menu.txb) replace the game's files at the next start - the Files app cannot merge a
  * folder into game/, it would replace the whole folder. The file each one replaces is kept in game/patch_backup/
  * (only the first time, so it stays the disc's); copying patch_backup/ back the same way restores the disc.
- * patch/ is removed once it is applied. Used for the fan Korean patch; files only, nothing is fetched. */
+ * patch/ is removed once it is applied, and the game's Z: cache is cleared so it is rebuilt from the new files. Used for the fan Korean patch; files only, nothing is fetched. */
 static int ios_mkdirs(char *path)                   /* the folders above path */
 {
     char *q;
@@ -158,7 +158,21 @@ static void ios_patch_walk(const char *game, const char *rel, int *n, int *bad)
     }
     closedir(d);
 }
-static void orta_ios_apply_patch_folder(const char *game)
+static void ios_rm_tree(const char *path)
+{
+    DIR *d = opendir(path);
+    struct dirent *e;
+    if (!d) { unlink(path); return; }
+    while ((e = readdir(d))) {
+        char c[HOST_PATH_MAX];
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        snprintf(c, sizeof c, "%s/%s", path, e->d_name);
+        ios_rm_tree(c);
+    }
+    closedir(d);
+    rmdir(path);
+}
+static void orta_ios_apply_patch_folder(const char *game, const char *data)
 {
     char p[HOST_PATH_MAX];
     int n = 0, bad = 0;
@@ -166,6 +180,13 @@ static void orta_ios_apply_patch_folder(const char *game)
     if (access(p, F_OK) != 0) return;
     ios_patch_walk(game, "", &n, &bad);
     if (!bad) rmdir(p);
+    /* Orta copies fonts and texts to its cache partition (Z:, data/cache/<title id>) and reads them from there:
+     * after a patch the old copies would mix with the new files (Korean patch: cut-scene subtitles with wrong
+     * glyph spacing/order, 2026-11-27). The game rebuilds the cache. */
+    if (n) {
+        snprintf(p, sizeof p, "%s/cache/4947002B", data); ios_rm_tree(p);
+        snprintf(p, sizeof p, "%s/cache/4947002b", data); ios_rm_tree(p);
+    }
     printf("[IOS] patch folder: %d files applied%s\n", n, bad ? ", some failed (left in patch/)" : "");
     fflush(stdout);
 }
@@ -336,7 +357,7 @@ int main(int argc, char **argv)
     }
 #endif
 #if defined(ORTA_IOS)
-    orta_ios_apply_patch_folder(opt.game_dir);
+    orta_ios_apply_patch_folder(opt.game_dir, opt.data_dir);
     /* iOS: from here on the title runs on a thread of its own (16 MB stack); the main thread stays in UIKit's run
      * loop pumping SDL's events, which the NV2A thread's window needs (toolkit nv2a_vk.c, XR_VK_IOS) */
     return orta_ios_run_game(orta_run, &opt);
