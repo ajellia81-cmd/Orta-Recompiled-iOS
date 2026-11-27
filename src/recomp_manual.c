@@ -1121,7 +1121,7 @@ static int opt_clone_label(uint32_t tmpl_id, uint32_t new_id, const char *text, 
 #include <TargetConditionals.h>
 #if TARGET_OS_IPHONE
 /* iOS (2026-11-18): "21:9" is the phone's whole screen (toolkit kernel_xbox.c: any ratio from 1.70 is the display's),
- * shown as SCREEN; the HUD at the edges as on Android (drawn under the cut-out too, no inset) */
+ * shown as SCREEN; the HUD keeps the game's own 16:9 layout (the move to the edges is off on iOS, 2026-11-27) */
 #define ORTA_IOS_SCREEN 1
 extern int orta_ios_native_lines(void);
 #endif
