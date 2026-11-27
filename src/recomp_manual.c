@@ -2300,7 +2300,12 @@ void sub_0006A520(RECOMP_PARAMS)
      * them apart - at 16:10 CONTROLS stepped right out of the OPTIONEN column, at 21:9 CONTROLS and the help box
      * title OPTIONSMODUS jumped left (test runs at 16:10 and 21:9). Outside flight the 2D stays
      * centre-squeezed - the menus' own layout at every aspect. */
-    if (f > 0.0f && n > 0 && s_in_flight) {
+    /* iOS (maintainer 2026-11-27): the move is off. It tore text that a texture batch splits - the flight cut
+     * scenes' Japanese / Korean subtitles ("ヴ   エ   レーン" for "エヴレーン": kana and kanji glyphs sit on different
+     * font sheets, a lone glyph in the left third went to the edge) - after the menus (#4) and more. The HUD keeps
+     * the game's own widescreen layout (centre-squeezed, 16:9 distances). */
+    (void)f; (void)n; (void)lo; (void)hi;
+    if (0) {
         static float bx0[ORTA_HUD_MAXQ], bx1[ORTA_HUD_MAXQ];
         static uint32_t bq[ORTA_HUD_MAXQ];
         float s16 = 0.75f * f;                       /* fb px -> 16:9 layout px (0.75 / q, q = 1 / f) */
