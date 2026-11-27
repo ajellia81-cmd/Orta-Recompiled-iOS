@@ -2288,48 +2288,6 @@ void sub_00069A90(RECOMP_PARAMS)
         s_hud_q[s_hud_n++] = vp0;
 }
 
-/* Text lines in the HUD move (2026-11-27). The game's font (sub_001C0840) hands every glyph to the sprite list
- * sub_001BFAA0 with its place in the 640 x 480 layout. A Japanese line mixes glyphs from several font textures
- * (kana sheet, the stage's kanji sheet), and the sprite layer draws one texture per batch, so the grouping below saw
- * a line in pieces: a lone glyph in the left third went to the left edge, the rest stayed - the flight cut scenes'
- * subtitles read "ヴ   エ   レーン" for "エヴレーン" (original Japanese and the Korean patch alike; trace run
- * 2026-11-27: the game's own layout was right, x 84 / 110 / 133). English lines are one texture, so they never
- * tore. Now the glyphs of a line are noted here as the game lays them out, and a quad on such a line (its y range
- * holds the line's y) moves with the WHOLE line by the same anchor rule, never on its own. */
-#define ORTA_TXT_MAX 64
-static struct { float y, x0, x1; uint32_t ms; } s_txt[ORTA_TXT_MAX];
-static void orta_text_glyph(float x, float y)
-{
-    uint32_t now = (uint32_t)SDL_GetTicks();
-    int i, free_i = -1, old_i = 0;
-    for (i = 0; i < ORTA_TXT_MAX; i++) {
-        if (s_txt[i].ms && now - s_txt[i].ms < 200u && s_txt[i].y > y - 0.5f && s_txt[i].y < y + 0.5f) {
-            if (now - s_txt[i].ms > 12u) {           /* a new frame: the line starts over */
-                s_txt[i].x0 = x; s_txt[i].x1 = x + 28.0f;
-            } else {
-                if (x < s_txt[i].x0) s_txt[i].x0 = x;
-                if (x + 28.0f > s_txt[i].x1) s_txt[i].x1 = x + 28.0f;
-            }
-            s_txt[i].ms = now | 1u;
-            return;
-        }
-        if (free_i < 0 && (!s_txt[i].ms || now - s_txt[i].ms >= 200u)) free_i = i;
-        if (s_txt[i].ms < s_txt[old_i].ms) old_i = i;
-    }
-    i = free_i >= 0 ? free_i : old_i;
-    s_txt[i].y = y; s_txt[i].x0 = x; s_txt[i].x1 = x + 28.0f; s_txt[i].ms = now | 1u;
-}
-/* The line a quad with this y range sits on, -1 if none (lines seen in the last 200 ms). */
-static int orta_text_line(float y0, float y1)
-{
-    uint32_t now = (uint32_t)SDL_GetTicks();
-    int i;
-    for (i = 0; i < ORTA_TXT_MAX; i++)
-        if (s_txt[i].ms && now - s_txt[i].ms < 200u && s_txt[i].y >= y0 - 2.0f && s_txt[i].y <= y1 + 2.0f)
-            return i;
-    return -1;
-}
-
 extern void sub_0006A520_gen(RECOMP_PARAMS);
 void sub_0006A520(RECOMP_PARAMS)
 {
@@ -2350,41 +2308,13 @@ void sub_0006A520(RECOMP_PARAMS)
         int m = 0;
         for (i = 0; i < n; i++) {                    /* this batch's quads only, sorted by x0 (insertion) */
             uint32_t va = s_hud_q[i];
-            float a = 1e30f, b = -1e30f, ya = 1e30f, yb = -1e30f;
-            int line;
+            float a = 1e30f, b = -1e30f;
             if (va < lo || va + 0x80u > hi)
                 continue;
             for (j = 0; j < 4; j++) {
-                float x = orta_qx(va + (uint32_t)j * 0x20u), y = orta_qx(va + (uint32_t)j * 0x20u + 4u);
+                float x = orta_qx(va + (uint32_t)j * 0x20u);
                 if (x < a) a = x;
                 if (x > b) b = x;
-                if (y < ya) ya = y;
-                if (y > yb) yb = y;
-            }
-            line = orta_text_line(ya, yb);
-            {   /* diagnostic: how the quads' y compare with the noted lines (first 40 batches with lines) */
-                static int dn;
-                if (dn < 200 && s_txt[0].ms && i < 3) {
-                    dn++;
-                    fprintf(stderr, "[HUDTXT] quad x %.1f..%.1f y %.1f..%.1f line %d (y %.1f x %.1f..%.1f)\n", a, b, ya,
-                            yb, line, line >= 0 ? s_txt[line].y : s_txt[0].y, line >= 0 ? s_txt[line].x0 : 0.0f,
-                            line >= 0 ? s_txt[line].x1 : 0.0f);
-                }
-            }
-            if (line >= 0) {                             /* a glyph of a text line: the whole line's move */
-                float c = 0.5f * (s_txt[line].x0 + s_txt[line].x1), d = 0.0f;
-                if (s_txt[line].x1 - s_txt[line].x0 <= 384.0f) {
-                    if (c < 640.0f / 3.0f) d = -dmove;
-                    else if (c > 1280.0f / 3.0f) d = dmove;
-                }
-                if (d != 0.0f)
-                    for (j = 0; j < 4; j++) {
-                        uint32_t vb = va + (uint32_t)j * 0x20u, bits;
-                        float x = orta_qx(vb) + d;
-                        memcpy(&bits, &x, 4);
-                        GUEST32(vb) = bits;
-                    }
-                continue;
             }
             for (j = m; j > 0 && bx0[j - 1] > a; j--) {
                 bx0[j] = bx0[j - 1]; bx1[j] = bx1[j - 1]; bq[j] = bq[j - 1];
@@ -4171,12 +4101,6 @@ void sub_001C0840(RECOMP_PARAMS)
 }
 void sub_001BFAA0(RECOMP_PARAMS)
 {
-    if (GUEST32(g_esp) == 0x001C0989u) {              /* a font glyph: note its line for the HUD move */
-        uint32_t xa = GUEST32(g_esp + 12), ya = GUEST32(g_esp + 16);
-        float x, y;
-        memcpy(&x, &xa, 4); memcpy(&y, &ya, 4);
-        orta_text_glyph(x, y);
-    }
     if (glyph_log_on() && GUEST32(g_esp) == 0x001C0989u) {
         uint32_t id = GUEST32(g_esp + 4), xa = GUEST32(g_esp + 12), ya = GUEST32(g_esp + 16);
         uint32_t key = s_glyph_code * 2654435761u ^ xa ^ (ya << 7);
